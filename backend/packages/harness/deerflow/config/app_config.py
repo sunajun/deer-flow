@@ -39,6 +39,12 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def _default_marketplace_config():
+    from deerflow.marketplace.models import MarketplaceConfig
+
+    return MarketplaceConfig()
+
+
 CONFIG_FILE_DATABASE_DEFAULTS = {
     "backend": "sqlite",
     "sqlite_dir": ".deer-flow/data",
@@ -124,6 +130,7 @@ class AppConfig(BaseModel):
     checkpointer: CheckpointerConfig | None = Field(default=None, description="Checkpointer configuration")
     stream_bridge: StreamBridgeConfig | None = Field(default=None, description="Stream bridge configuration")
     plan: PlanConfig = Field(default_factory=PlanConfig, description="Plan DAG 编排配置")
+    marketplace: "MarketplaceConfig" = Field(default_factory=_default_marketplace_config, description="Skill marketplace configuration")
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig, description="Scheduler service configuration")
     claude_sessions: ClaudeSessionsAppConfig = Field(default_factory=ClaudeSessionsAppConfig, description="Claude Code multi-session configuration")
 
@@ -473,3 +480,8 @@ def pop_current_app_config() -> None:
     previous = stack[-1]
     _current_app_config_stack.set(stack[:-1])
     _current_app_config.set(previous)
+
+
+from deerflow.marketplace.models import MarketplaceConfig  # noqa: E402
+
+AppConfig.model_rebuild()

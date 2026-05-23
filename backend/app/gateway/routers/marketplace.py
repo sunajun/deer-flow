@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from deerflow.marketplace import MarketplaceConfig, SkillCategory, SkillRegistry
+from deerflow.marketplace import MarketplaceConfig, SkillCategory, SkillRegistry, SkillUpdater
 from deerflow.skills.installer import SkillAlreadyExistsError, SkillSecurityScanError
 
 logger = logging.getLogger(__name__)
@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/marketplace", tags=["marketplace"])
 
 _registry: SkillRegistry | None = None
+_updater: SkillUpdater | None = None
 
 
 def _get_registry() -> SkillRegistry:
@@ -21,6 +22,15 @@ def _get_registry() -> SkillRegistry:
         return _registry
     _registry = SkillRegistry(MarketplaceConfig())
     return _registry
+
+
+def _get_updater() -> SkillUpdater:
+    global _updater
+    if _updater is not None:
+        return _updater
+    registry = _get_registry()
+    _updater = SkillUpdater(registry, MarketplaceConfig())
+    return _updater
 
 
 class MarketplaceSkillSummary(BaseModel):
@@ -94,6 +104,16 @@ class UpdateSkillResponse(BaseModel):
     success: bool = True
     skill_id: str
     message: str = "Skill updated"
+
+
+class UpdateAllResponse(BaseModel):
+    results: list[dict]
+
+
+class UpdateStatusResponse(BaseModel):
+    last_check: str | None = None
+    available_updates: int = 0
+    updates: list[dict] = []
 
 
 def _entry_to_summary(entry) -> MarketplaceSkillSummary:
@@ -263,3 +283,26 @@ async def refresh_marketplace_index():
         logger.error("Failed to refresh marketplace index: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to refresh index: {str(e)}") from None
     return RefreshResponse()
+
+
+@router.post("/update-all", response_model=UpdateAllResponse)
+async def update_all_marketplace_skills():
+    updater = _get_updater()
+    try:
+        results = await updater.update_all()
+    except Exception as e:
+        logger.error("Failed to update all skills: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update all skills: {str(e)}") from None
+    return UpdateAllResponse(results=results)
+
+
+@router.get("/update-status", response_model=UpdateStatusResponse)
+async def get_marketplace_update_status():
+    updater = _get_updater()
+    last_check = updater._last_check.isoformat() if updater._last_check else None
+    available_updates = updater._available_updates
+    return UpdateStatusResponse(
+        last_check=last_check,
+        available_updates=len(available_updates),
+        updates=available_updates,
+    )
