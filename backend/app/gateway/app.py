@@ -17,6 +17,7 @@ from app.gateway.routers import (
     assistants_compat,
     auth,
     channels,
+    claude_sessions,
     feedback,
     governance,
     mcp,
@@ -365,6 +366,10 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
                 "name": "health",
                 "description": "Health check and system status endpoints",
             },
+            {
+                "name": "claude-sessions",
+                "description": "Manage Claude Code multi-session lifecycle (create, stream, pause, resume, terminate)",
+            },
         ],
     )
 
@@ -435,6 +440,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Governance API is mounted at /api/governance
     app.include_router(governance.router)
+
+    # Claude Sessions API is mounted at /api/claude-sessions
+    app.include_router(claude_sessions.router)
 
     # Assistants compatibility API (LangGraph Platform stub)
     app.include_router(assistants_compat.router)

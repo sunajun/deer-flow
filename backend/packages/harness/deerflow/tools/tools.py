@@ -214,6 +214,17 @@ def get_available_tools(
 
         builtin_tools.extend([activate_scene, deactivate_scene, list_active_scenes])
 
+    claude_session_config = getattr(config, "claude_sessions", None)
+    if claude_session_config and getattr(claude_session_config, "enabled", False):
+        from deerflow.tools.claude_session_tools import (
+            claude_code_task,
+            list_claude_sessions,
+            terminate_claude_session,
+        )
+
+        builtin_tools.extend([claude_code_task, list_claude_sessions, terminate_claude_session])
+        logger.info("Including Claude session tools (claude_code_task, list_claude_sessions, terminate_claude_session)")
+
     logger.info(f"Total tools loaded: {len(loaded_tools)}, built-in tools: {len(builtin_tools)}, MCP tools: {len(mcp_tools)}, ACP tools: {len(acp_tools)}")
 
     # Deduplicate by tool name — config-loaded tools take priority, followed by

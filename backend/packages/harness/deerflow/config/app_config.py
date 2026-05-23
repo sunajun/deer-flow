@@ -52,6 +52,18 @@ class CircuitBreakerConfig(BaseModel):
     recovery_timeout_sec: int = Field(default=60, description="Time in seconds before attempting to recover the circuit")
 
 
+class ClaudeSessionsAppConfig(BaseModel):
+    """Configuration for Claude Code multi-session (mirrors SessionConfig to avoid circular imports)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    enabled: bool = Field(default=True, description="Whether Claude Code session tools are enabled")
+    max_parallel: int = Field(default=3, description="Maximum parallel sessions per thread")
+    default_timeout: int = Field(default=3600, description="Default session timeout in seconds")
+    auto_terminate_idle: int = Field(default=1800, description="Auto-terminate idle sessions after this many seconds")
+    working_directory: str | None = Field(default=None, description="Default working directory for sessions")
+
+
 def _legacy_config_candidates() -> tuple[Path, ...]:
     """Return source-tree config.yaml locations for monorepo compatibility."""
     backend_dir = Path(__file__).resolve().parents[4]
@@ -113,6 +125,7 @@ class AppConfig(BaseModel):
     stream_bridge: StreamBridgeConfig | None = Field(default=None, description="Stream bridge configuration")
     plan: PlanConfig = Field(default_factory=PlanConfig, description="Plan DAG 编排配置")
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig, description="Scheduler service configuration")
+    claude_sessions: ClaudeSessionsAppConfig = Field(default_factory=ClaudeSessionsAppConfig, description="Claude Code multi-session configuration")
 
     @classmethod
     def resolve_config_path(cls, config_path: str | None = None) -> Path:
