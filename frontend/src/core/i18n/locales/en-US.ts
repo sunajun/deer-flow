@@ -173,6 +173,7 @@ export const enUS: Translations = {
     recentChats: "Recent chats",
     demoChats: "Demo chats",
     agents: "Agents",
+    tasks: "Tasks",
   },
 
   // Agents
@@ -228,6 +229,7 @@ export const enUS: Translations = {
   breadcrumb: {
     workspace: "Workspace",
     chats: "Chats",
+    tasks: "Tasks",
   },
 
   // Workspace
@@ -251,6 +253,65 @@ export const enUS: Translations = {
   // Chats
   chats: {
     searchChats: "Search chats",
+  },
+
+  // Task Center
+  taskCenter: {
+    title: "Task Center",
+    taskId: "Task ID",
+    name: "Name",
+    type: "Type",
+    status: "Status",
+    createdAt: "Created At",
+    duration: "Duration",
+    description: "Description",
+    result: "Result",
+    error: "Error",
+    parentTask: "Parent Task",
+    subtasks: "Subtasks",
+    noSubtasks: "No subtasks",
+    noTasks: "No tasks found",
+    filterAll: "All",
+    filterRunning: "Running",
+    filterSuccess: "Success",
+    filterFailed: "Failed",
+    filterCancelled: "Cancelled",
+    filterPending: "Pending",
+    typeManual: "Manual",
+    typeScheduled: "Scheduled",
+    typeSubagent: "Sub-agent",
+    typeDagNode: "DAG Node",
+    typeAll: "All Types",
+    retry: "Retry",
+    rerun: "Rerun",
+    cancel: "Cancel",
+    exportAudit: "Export Audit",
+    retryConfirmTitle: "Retry this task?",
+    retryConfirmDescription:
+      "This will reset the task status and re-execute it.",
+    rerunConfirmTitle: "Rerun this task?",
+    rerunConfirmDescription:
+      "This will create a new task with the same configuration.",
+    cancelConfirmTitle: "Cancel this task?",
+    cancelConfirmDescription:
+      "This will stop the running task. This action cannot be undone.",
+    exportSuccess: "Audit report exported",
+    operationSuccess: "Operation succeeded",
+    operationFailed: "Operation failed",
+    logs: "Logs",
+    logsEmpty: "No logs available",
+    logsSearch: "Search logs...",
+    timeline: "Timeline",
+    basicInfo: "Basic Info",
+    page: "Page",
+    prev: "Previous",
+    next: "Next",
+    statusPending: "Pending",
+    statusRunning: "Running",
+    statusSuccess: "Success",
+    statusFailed: "Failed",
+    statusPaused: "Paused",
+    statusCancelled: "Cancelled",
   },
 
   // Page titles (document title)

@@ -1,4 +1,4 @@
-﻿import {
+import {
   CompassIcon,
   GraduationCapIcon,
   ImageIcon,
@@ -167,6 +167,7 @@ export const zhCN: Translations = {
     recentChats: "最近的对话",
     demoChats: "演示对话",
     agents: "智能体",
+    tasks: "任务",
   },
 
   // Agents
@@ -216,6 +217,7 @@ export const zhCN: Translations = {
   breadcrumb: {
     workspace: "工作区",
     chats: "对话",
+    tasks: "任务",
   },
 
   // Workspace
@@ -239,6 +241,62 @@ export const zhCN: Translations = {
   // Chats
   chats: {
     searchChats: "搜索对话",
+  },
+
+  // Task Center
+  taskCenter: {
+    title: "任务中心",
+    taskId: "任务 ID",
+    name: "名称",
+    type: "类型",
+    status: "状态",
+    createdAt: "创建时间",
+    duration: "耗时",
+    description: "描述",
+    result: "执行结果",
+    error: "错误信息",
+    parentTask: "父任务",
+    subtasks: "子任务",
+    noSubtasks: "暂无子任务",
+    noTasks: "暂无任务",
+    filterAll: "全部",
+    filterRunning: "运行中",
+    filterSuccess: "成功",
+    filterFailed: "失败",
+    filterCancelled: "已取消",
+    filterPending: "等待中",
+    typeManual: "手动",
+    typeScheduled: "定时",
+    typeSubagent: "子代理",
+    typeDagNode: "DAG 节点",
+    typeAll: "全部类型",
+    retry: "重试",
+    rerun: "重跑",
+    cancel: "取消",
+    exportAudit: "导出审计",
+    retryConfirmTitle: "确认重试此任务？",
+    retryConfirmDescription: "将重置任务状态并重新执行。",
+    rerunConfirmTitle: "确认重跑此任务？",
+    rerunConfirmDescription: "将创建一个相同配置的新任务。",
+    cancelConfirmTitle: "确认取消此任务？",
+    cancelConfirmDescription: "将停止正在运行的任务，此操作不可撤销。",
+    exportSuccess: "审计报告已导出",
+    operationSuccess: "操作成功",
+    operationFailed: "操作失败",
+    logs: "日志",
+    logsEmpty: "暂无日志",
+    logsSearch: "搜索日志...",
+    timeline: "时间线",
+    basicInfo: "基本信息",
+    page: "页码",
+    prev: "上一页",
+    next: "下一页",
+    statusPending: "等待中",
+    statusRunning: "运行中",
+    statusSuccess: "成功",
+    statusFailed: "失败",
+    statusPaused: "已暂停",
+    statusCancelled: "已取消",
   },
 
   // Page titles (document title)

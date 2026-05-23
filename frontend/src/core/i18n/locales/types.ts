@@ -117,6 +117,7 @@ export interface Translations {
     chats: string;
     demoChats: string;
     agents: string;
+    tasks: string;
   };
 
   // Agents
@@ -159,6 +160,7 @@ export interface Translations {
   breadcrumb: {
     workspace: string;
     chats: string;
+    tasks: string;
   };
 
   // Workspace
@@ -182,6 +184,62 @@ export interface Translations {
   // Chats
   chats: {
     searchChats: string;
+  };
+
+  // Task Center
+  taskCenter: {
+    title: string;
+    taskId: string;
+    name: string;
+    type: string;
+    status: string;
+    createdAt: string;
+    duration: string;
+    description: string;
+    result: string;
+    error: string;
+    parentTask: string;
+    subtasks: string;
+    noSubtasks: string;
+    noTasks: string;
+    filterAll: string;
+    filterRunning: string;
+    filterSuccess: string;
+    filterFailed: string;
+    filterCancelled: string;
+    filterPending: string;
+    typeManual: string;
+    typeScheduled: string;
+    typeSubagent: string;
+    typeDagNode: string;
+    typeAll: string;
+    retry: string;
+    rerun: string;
+    cancel: string;
+    exportAudit: string;
+    retryConfirmTitle: string;
+    retryConfirmDescription: string;
+    rerunConfirmTitle: string;
+    rerunConfirmDescription: string;
+    cancelConfirmTitle: string;
+    cancelConfirmDescription: string;
+    exportSuccess: string;
+    operationSuccess: string;
+    operationFailed: string;
+    logs: string;
+    logsEmpty: string;
+    logsSearch: string;
+    timeline: string;
+    basicInfo: string;
+    page: string;
+    prev: string;
+    next: string;
+    statusPending: string;
+    statusRunning: string;
+    statusSuccess: string;
+    statusFailed: string;
+    statusPaused: string;
+    statusCancelled: string;
   };
 
   // Page titles (document title)
