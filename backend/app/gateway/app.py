@@ -11,6 +11,7 @@ from app.gateway.config import get_gateway_config
 from app.gateway.csrf_middleware import CSRFMiddleware, get_configured_cors_origins
 from app.gateway.deps import langgraph_runtime
 from app.gateway.routers import (
+    agent_configs,
     agents,
     artifacts,
     assistants_compat,
@@ -336,6 +337,10 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
                 "description": "Create and manage custom agents with per-agent config and prompts",
             },
             {
+                "name": "agent-configs",
+                "description": "Agent configuration version management with rollback support",
+            },
+            {
                 "name": "suggestions",
                 "description": "Generate follow-up question suggestions for conversations",
             },
@@ -405,6 +410,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
+
+    # Agent Configs API is mounted at /api/agent-configs
+    app.include_router(agent_configs.router)
 
     # Plans API is mounted at /api/plans
     app.include_router(plans.router)
