@@ -25,6 +25,7 @@ from app.gateway.routers import (
     scenes,
     skills,
     suggestions,
+    tasks,
     thread_runs,
     threads,
     uploads,
@@ -376,6 +377,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Scenes API is mounted at /api/scenes
     app.include_router(scenes.router)
+
+    # Tasks API is mounted at /api/tasks
+    app.include_router(tasks.router)
 
     # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)

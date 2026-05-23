@@ -346,6 +346,22 @@ async def start_run(
 
     stream_modes = normalize_stream_modes(body.stream_mode)
 
+    from app.gateway.models.task_center import TaskRecord as TaskCenterRecord
+    from app.gateway.models.task_center import TaskStatus
+    from app.gateway.services.task_center_service import get_task_center_service
+
+    task_center = get_task_center_service()
+    task_record = TaskCenterRecord(
+        task_id=f"task_{record.run_id}",
+        thread_id=thread_id,
+        task_type="agent_run",
+        name=f"Run {record.run_id[:8]}",
+        status=TaskStatus.RUNNING,
+        created_by=getattr(getattr(request.state, "user", None), "id", "default") or "default",
+    )
+    await task_center.create_task(task_record)
+    await task_center.append_log(record.run_id, f"Run {record.run_id} started on thread {thread_id}")
+
     task = asyncio.create_task(
         run_agent(
             bridge,
@@ -362,6 +378,30 @@ async def start_run(
         )
     )
     record.task = task
+
+    def _on_run_done(t: asyncio.Task) -> None:
+        final_status = record.status
+        if final_status == RunStatus.success:
+            status = TaskStatus.SUCCESS
+        elif final_status in (RunStatus.interrupted, RunStatus.cancelled):
+            status = TaskStatus.CANCELLED
+        elif final_status == RunStatus.error:
+            status = TaskStatus.FAILED
+        else:
+            status = TaskStatus.FAILED
+        try:
+            import asyncio as _asyncio
+
+            _asyncio.get_event_loop().create_task(
+                task_center.update_task_status(task_record.task_id, status)
+            )
+            _asyncio.get_event_loop().create_task(
+                task_center.append_log(record.run_id, f"Run finished with status {final_status.value}")
+            )
+        except RuntimeError:
+            pass
+
+    task.add_done_callback(_on_run_done)
 
     # Title sync is handled by worker.py's finally block which reads the
     # title from the checkpoint and calls thread_store.update_display_name

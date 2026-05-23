@@ -7,6 +7,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from app.gateway.models.task_center import TaskRecord, TaskStatus
+from app.gateway.services.task_center_persistence import TaskCenterPersistence
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ class TaskCenterService:
         self._logs: dict[str, list[str]] = {}
         self._max_tasks = max_tasks
         self._max_logs_per_task = max_logs_per_task
+        self._persistence = TaskCenterPersistence()
 
     def _evict_if_needed(self) -> None:
         while len(self._tasks) > self._max_tasks:
@@ -45,17 +47,28 @@ class TaskCenterService:
 
     async def get_task_detail(self, task_id: str) -> TaskRecord | None:
         data = self._tasks.get(task_id)
-        if data is None:
-            return None
-        return TaskRecord.from_storage_dict(data)
+        if data is not None:
+            return TaskRecord.from_storage_dict(data)
+        record = await self._persistence.load_task(task_id)
+        if record is not None:
+            self._tasks[task_id] = record.to_storage_dict()
+            self._tasks.move_to_end(task_id)
+        return record
 
     async def get_task_logs(self, task_id: str) -> list[str]:
-        return self._logs.get(task_id, [])
+        logs = self._logs.get(task_id, [])
+        if logs:
+            return logs
+        persisted = await self._persistence.load_logs(task_id)
+        if persisted:
+            self._logs[task_id] = persisted
+        return persisted
 
     async def create_task(self, task: TaskRecord) -> TaskRecord:
         self._tasks[task.task_id] = task.to_storage_dict()
         self._tasks.move_to_end(task.task_id)
         self._evict_if_needed()
+        await self._persistence.save_task(task)
         logger.info("Created task %s (%s)", task.task_id, task.task_type)
         return task
 
@@ -68,7 +81,9 @@ class TaskCenterService:
             if key in data:
                 data[key] = value
         self._tasks.move_to_end(task_id)
-        return TaskRecord.from_storage_dict(data)
+        record = TaskRecord.from_storage_dict(data)
+        await self._persistence.save_task(record)
+        return record
 
     async def retry_task(self, task_id: str) -> TaskRecord:
         data = self._tasks.get(task_id)
@@ -82,7 +97,9 @@ class TaskCenterService:
         data["started_at"] = None
         data["finished_at"] = None
         self._tasks.move_to_end(task_id)
-        return TaskRecord.from_storage_dict(data)
+        record = TaskRecord.from_storage_dict(data)
+        await self._persistence.save_task(record)
+        return record
 
     async def rerun_task(self, task_id: str, use_new_thread: bool = False) -> TaskRecord:
         data = self._tasks.get(task_id)
@@ -101,6 +118,7 @@ class TaskCenterService:
         )
         self._tasks[new_task.task_id] = new_task.to_storage_dict()
         self._evict_if_needed()
+        await self._persistence.save_task(new_task)
         return new_task
 
     async def cancel_task(self, task_id: str) -> TaskRecord:
@@ -112,13 +130,17 @@ class TaskCenterService:
             raise ValueError("只能取消运行中或等待中的任务")
         data["status"] = TaskStatus.CANCELLED.value
         data["finished_at"] = datetime.now().isoformat()
-        return TaskRecord.from_storage_dict(data)
+        record = TaskRecord.from_storage_dict(data)
+        await self._persistence.save_task(record)
+        return record
 
     async def export_task_audit(self, task_id: str) -> str:
         data = self._tasks.get(task_id)
         if data is None:
             raise ValueError(f"Task {task_id} not found")
         logs = self._logs.get(task_id, [])
+        if not logs:
+            logs = await self._persistence.load_logs(task_id)
         report = {
             "task_id": data["task_id"],
             "name": data["name"],
@@ -140,9 +162,11 @@ class TaskCenterService:
         if task_id not in self._logs:
             self._logs[task_id] = []
         logs = self._logs[task_id]
-        logs.append(f"[{datetime.now().isoformat()}] {log_entry}")
+        formatted = f"[{datetime.now().isoformat()}] {log_entry}"
+        logs.append(formatted)
         if len(logs) > self._max_logs_per_task:
             self._logs[task_id] = logs[-self._max_logs_per_task :]
+        await self._persistence.save_log(task_id, formatted)
 
 
 _task_center_service: TaskCenterService | None = None
