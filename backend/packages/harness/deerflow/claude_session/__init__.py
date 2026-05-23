@@ -1,3 +1,4 @@
+from deerflow.claude_session.acp_adapter import ClaudeACPAdapter
 from deerflow.claude_session.manager import ClaudeSessionManager
 from deerflow.claude_session.models import (
     ClaudeSession,
@@ -8,6 +9,7 @@ from deerflow.claude_session.models import (
 )
 
 __all__ = [
+    "ClaudeACPAdapter",
     "ClaudeSession",
     "ClaudeSessionManager",
     "ClaudeSessionPool",

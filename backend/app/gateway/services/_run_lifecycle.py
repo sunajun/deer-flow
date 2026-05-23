@@ -357,7 +357,7 @@ async def start_run(
         task_type="agent_run",
         name=f"Run {record.run_id[:8]}",
         status=TaskStatus.RUNNING,
-        created_by=getattr(getattr(request.state, "user", None), "id", "default") or "default",
+        created_by=str(getattr(getattr(request.state, "user", None), "id", "default") or "default"),
     )
     await task_center.create_task(task_record)
     await task_center.append_log(record.run_id, f"Run {record.run_id} started on thread {thread_id}")

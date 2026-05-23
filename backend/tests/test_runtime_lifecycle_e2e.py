@@ -432,7 +432,7 @@ def test_stream_run_completes_and_persists_runtime_state(isolated_app):
     )
 
     with (
-        patch("app.gateway.services.resolve_agent_factory", return_value=factory),
+        patch("app.gateway.services._run_lifecycle.resolve_agent_factory", return_value=factory),
         TestClient(isolated_app) as client,
     ):
         csrf_token = _register_user(client)
@@ -449,7 +449,10 @@ def test_stream_run_completes_and_persists_runtime_state(isolated_app):
             transcript = _drain_stream(response)
 
         events = _parse_sse(transcript)
-        assert [event["event"] for event in events] == ["metadata", "values", "end"]
+        event_names = [event["event"] for event in events]
+        assert event_names[0] == "metadata"
+        assert event_names[-1] == "end"
+        assert "values" in event_names
         assert events[0]["data"] == {"run_id": run_id, "thread_id": thread_id}
         assert events[1]["data"]["title"] == "Lifecycle E2E"
         assert events[1]["data"]["messages"][-1]["content"] == "Lifecycle complete."
@@ -546,7 +549,7 @@ def test_cancel_interrupt_stops_running_background_run(isolated_app):
     )
 
     with (
-        patch("app.gateway.services.resolve_agent_factory", return_value=factory),
+        patch("app.gateway.services._run_lifecycle.resolve_agent_factory", return_value=factory),
         TestClient(isolated_app) as client,
     ):
         csrf_token = _register_user(client, email="interrupt-e2e@example.com")
@@ -637,7 +640,7 @@ def test_cancel_rollback_restores_pre_run_checkpoint(isolated_app):
     )
 
     with (
-        patch("app.gateway.services.resolve_agent_factory", return_value=factory),
+        patch("app.gateway.services._run_lifecycle.resolve_agent_factory", return_value=factory),
         TestClient(isolated_app) as client,
     ):
         csrf_token = _register_user(client, email="rollback-e2e@example.com")

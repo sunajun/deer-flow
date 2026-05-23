@@ -103,7 +103,9 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
 
         app.state.stream_bridge = await stack.enter_async_context(make_stream_bridge(config))
 
-        import app.gateway.models.task_center_db  # noqa: F401
+        import importlib
+
+        importlib.import_module("app.gateway.models.task_center_db")
 
         # Initialize persistence engine BEFORE checkpointer so that
         # auto-create-database logic runs first (postgres backend).

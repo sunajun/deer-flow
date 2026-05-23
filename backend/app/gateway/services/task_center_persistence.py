@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 
 from sqlalchemy import select
 
@@ -27,9 +28,9 @@ class TaskCenterPersistence:
                 name=data["name"],
                 description=data.get("description", ""),
                 status=data["status"],
-                created_at=data.get("created_at"),
-                started_at=data.get("started_at"),
-                finished_at=data.get("finished_at"),
+                created_at=self._parse_datetime(data.get("created_at")),
+                started_at=self._parse_datetime(data.get("started_at")),
+                finished_at=self._parse_datetime(data.get("finished_at")),
                 duration=data.get("duration"),
                 result=json.dumps(data["result"], ensure_ascii=False) if data.get("result") else None,
                 error=data.get("error"),
@@ -85,6 +86,16 @@ class TaskCenterPersistence:
             stmt = select(TaskLogRow).where(TaskLogRow.task_id == task_id).order_by(TaskLogRow.created_at)
             result = await session.execute(stmt)
             return [row.entry for row in result.scalars()]
+
+    @staticmethod
+    def _parse_datetime(value) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            return datetime.fromisoformat(value)
+        return None
 
     @staticmethod
     def _row_to_record(row: TaskRow) -> TaskRecord:

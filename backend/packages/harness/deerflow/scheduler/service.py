@@ -165,8 +165,17 @@ class SchedulerService:
         return "running"
 
     async def _send_notification(self, task: ScheduledTask, run: ScheduleRun) -> None:
-        from app.channels.message_bus import OutboundMessage
-        from app.channels.service import get_channel_service
+        import importlib
+
+        try:
+            message_bus_mod = importlib.import_module("app.channels.message_bus")
+            service_mod = importlib.import_module("app.channels.service")
+        except ImportError:
+            logger.warning("app.channels not available, skipping notification for task %s", task.task_id)
+            return
+
+        OutboundMessage = message_bus_mod.OutboundMessage
+        get_channel_service = service_mod.get_channel_service
 
         channel_service = get_channel_service()
         if channel_service is None:

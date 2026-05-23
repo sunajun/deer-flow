@@ -12,6 +12,12 @@ router = APIRouter(prefix="/api/governance", tags=["governance"])
 _governance_config: GovernanceConfig | None = None
 
 
+def _copy_builtin_roles() -> dict:
+    import copy
+
+    return copy.deepcopy(BUILTIN_ROLES)
+
+
 def _get_config() -> GovernanceConfig:
     global _governance_config
     if _governance_config is not None:
@@ -25,10 +31,10 @@ def _get_config() -> GovernanceConfig:
             _governance_config = GovernanceConfig.model_validate(raw)
         else:
             _governance_config = GovernanceConfig(
-                roles=BUILTIN_ROLES,
+                roles=_copy_builtin_roles(),
             )
     except Exception:
-        _governance_config = GovernanceConfig(roles=BUILTIN_ROLES)
+        _governance_config = GovernanceConfig(roles=_copy_builtin_roles())
     return _governance_config
 
 
