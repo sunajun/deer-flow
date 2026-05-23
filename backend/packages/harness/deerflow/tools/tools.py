@@ -49,6 +49,7 @@ def get_available_tools(
     subagent_enabled: bool = False,
     *,
     app_config: AppConfig | None = None,
+    allowed_tools: set[str] | None = None,
 ) -> list[BaseTool]:
     """Get all available tools from config.
 
@@ -60,6 +61,11 @@ def get_available_tools(
         include_mcp: Whether to include tools from MCP servers (default: True).
         model_name: Optional model name to determine if vision tools should be included.
         subagent_enabled: Whether to include subagent tools (task, task_status).
+        app_config: Optional application config override.
+        allowed_tools: Optional set of tool names allowed by the current scene.
+            When provided, only tools whose names are in this set will be returned.
+            Scene tools (activate_scene, deactivate_scene, list_active_scenes) are
+            always included regardless of this filter.
 
     Returns:
         List of available tools.
@@ -201,6 +207,13 @@ def get_available_tools(
     except Exception as e:
         logger.warning(f"Failed to load ACP tool: {e}")
 
+    scene_tool_names = {"activate_scene", "deactivate_scene", "list_active_scenes"}
+    scene_config = getattr(config, "scenes", None)
+    if scene_config and getattr(scene_config, "enabled", False):
+        from deerflow.tools.scene_tools import activate_scene, deactivate_scene, list_active_scenes
+
+        builtin_tools.extend([activate_scene, deactivate_scene, list_active_scenes])
+
     logger.info(f"Total tools loaded: {len(loaded_tools)}, built-in tools: {len(builtin_tools)}, MCP tools: {len(mcp_tools)}, ACP tools: {len(acp_tools)}")
 
     # Deduplicate by tool name — config-loaded tools take priority, followed by
@@ -218,4 +231,15 @@ def get_available_tools(
                 "Duplicate tool name %r detected and skipped — check your config.yaml and MCP server registrations (issue #1803).",
                 t.name,
             )
+
+    # Scene filtering: apply allowed_tools filter after deduplication
+    if allowed_tools is not None:
+        filtered = [t for t in unique_tools if t.name in allowed_tools or t.name in scene_tool_names]
+        logger.info(
+            "Scene filter applied: %d/%d tools allowed (scene tools always included)",
+            len(filtered),
+            len(unique_tools),
+        )
+        return filtered
+
     return unique_tools

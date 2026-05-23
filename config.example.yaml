@@ -1130,3 +1130,18 @@ run_events:
 #   failure_threshold: 5
 #   # Time in seconds before attempting to recover (default: 60)
 #   recovery_timeout_sec: 60
+
+# ============================================================================
+# Scenes Configuration
+# ============================================================================
+# Enable scene-based tool filtering and auto-deactivation.
+# When enabled, the agent's available tools are filtered by the active scene(s),
+# and scene switching tools (activate_scene, deactivate_scene, list_active_scenes)
+# are automatically added to the agent's toolset.
+
+# scenes:
+#   enabled: true
+#   auto_deactivate: true
+#   default_scene: conversation
+#   intent_keywords: {}  # Override default intent keywords
+#   custom_scenes: []
