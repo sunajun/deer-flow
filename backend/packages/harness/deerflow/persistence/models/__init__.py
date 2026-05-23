@@ -19,5 +19,6 @@ from deerflow.persistence.models.run_event import RunEventRow
 from deerflow.persistence.run.model import RunRow
 from deerflow.persistence.thread_meta.model import ThreadMetaRow
 from deerflow.persistence.user.model import UserRow
+from deerflow.scheduler.db_models import ScheduleRunRow, ScheduledTaskRow
 
-__all__ = ["FeedbackRow", "RunEventRow", "RunRow", "ThreadMetaRow", "UserRow"]
+__all__ = ["FeedbackRow", "RunEventRow", "RunRow", "ScheduleRunRow", "ScheduledTaskRow", "ThreadMetaRow", "UserRow"]

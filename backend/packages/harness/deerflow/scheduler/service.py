@@ -9,18 +9,24 @@ import httpx
 from croniter import croniter
 
 from deerflow.scheduler.models import ScheduledTask, ScheduleRun, ScheduleStatus
+from deerflow.scheduler.persistence import SchedulePersistence
 
 logger = logging.getLogger(__name__)
 
 
 class SchedulerService:
-    def __init__(self) -> None:
+    def __init__(self, persistence: SchedulePersistence | None = None) -> None:
         self.tasks: dict[str, ScheduledTask] = {}
         self.runs: list[ScheduleRun] = []
         self._running = False
         self._tick_interval = 60
+        self.persistence = persistence
 
     async def start(self) -> None:
+        if self.persistence:
+            tasks = await self.persistence.load_all_tasks()
+            self.tasks = {t.task_id: t for t in tasks}
+            logger.info("Loaded %d scheduled tasks from database", len(tasks))
         self._running = True
         logger.info("SchedulerService started")
         while self._running:
@@ -100,6 +106,10 @@ class SchedulerService:
         task.updated_at = now
         self.runs.append(run)
 
+        if self.persistence:
+            await self.persistence.save_task(task)
+            await self.persistence.save_run(run)
+
         asyncio.create_task(self._wait_and_notify(task, run))
 
     async def _create_thread(self, prompt: str) -> str:
@@ -133,6 +143,9 @@ class SchedulerService:
         else:
             run.status = "failed"
             run.error = "执行超时"
+
+        if self.persistence:
+            await self.persistence.save_run(run)
 
         if task.notification.enabled:
             await self._send_notification(task, run)
@@ -182,6 +195,8 @@ class SchedulerService:
 
     async def create_task(self, task: ScheduledTask) -> ScheduledTask:
         self.tasks[task.task_id] = task
+        if self.persistence:
+            await self.persistence.save_task(task)
         logger.info("Created scheduled task %s", task.task_id)
         return task
 
@@ -193,10 +208,14 @@ class SchedulerService:
         update_data.update(updates)
         update_data["updated_at"] = datetime.now(UTC).isoformat()
         self.tasks[task_id] = ScheduledTask.model_validate(update_data)
+        if self.persistence:
+            await self.persistence.save_task(self.tasks[task_id])
         return self.tasks[task_id]
 
     async def delete_task(self, task_id: str) -> None:
         self.tasks.pop(task_id, None)
+        if self.persistence:
+            await self.persistence.delete_task(task_id)
 
     async def pause_task(self, task_id: str) -> None:
         await self.update_task(task_id, {"status": ScheduleStatus.PAUSED.value})

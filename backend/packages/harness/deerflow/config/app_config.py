@@ -23,6 +23,7 @@ from deerflow.config.run_events_config import RunEventsConfig
 from deerflow.config.runtime_paths import existing_project_file
 from deerflow.config.safety_finish_reason_config import SafetyFinishReasonConfig
 from deerflow.config.sandbox_config import SandboxConfig
+from deerflow.config.scheduler_config import SchedulerConfig
 from deerflow.config.skill_evolution_config import SkillEvolutionConfig
 from deerflow.config.skills_config import SkillsConfig
 from deerflow.config.stream_bridge_config import StreamBridgeConfig, load_stream_bridge_config_from_dict
@@ -111,6 +112,7 @@ class AppConfig(BaseModel):
     checkpointer: CheckpointerConfig | None = Field(default=None, description="Checkpointer configuration")
     stream_bridge: StreamBridgeConfig | None = Field(default=None, description="Stream bridge configuration")
     plan: PlanConfig = Field(default_factory=PlanConfig, description="Plan DAG 编排配置")
+    scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig, description="Scheduler service configuration")
 
     @classmethod
     def resolve_config_path(cls, config_path: str | None = None) -> Path:

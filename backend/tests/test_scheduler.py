@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from deerflow.config.app_config import AppConfig
+from deerflow.config.scheduler_config import SchedulerConfig
 from deerflow.scheduler.models import (
     ScheduledTask,
     ScheduleNotification,
@@ -10,6 +12,7 @@ from deerflow.scheduler.models import (
     ScheduleStatus,
     ScheduleTrigger,
 )
+from deerflow.scheduler.persistence import SchedulePersistence
 from deerflow.scheduler.service import SchedulerService, get_scheduler_service, reset_scheduler_service
 
 
@@ -542,3 +545,394 @@ class TestSingletonAccess:
         svc2 = get_scheduler_service()
         assert svc is not svc2
         reset_scheduler_service()
+
+
+class TestExecuteCreatesThread:
+    @pytest.mark.asyncio
+    async def test_execute_creates_thread(self):
+        svc = SchedulerService()
+        svc._create_thread = AsyncMock(return_value="thread_new")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+        task = _make_task()
+        await svc._execute(task)
+        run = svc.runs[0]
+        assert run.thread_id == "thread_new"
+        svc._create_thread.assert_awaited_once()
+
+
+class TestExecuteReuseThread:
+    @pytest.mark.asyncio
+    async def test_execute_reuse_thread(self):
+        svc = SchedulerService()
+        svc._create_thread = AsyncMock(return_value="thread_new")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+        task = _make_task(reuse_thread=True, thread_id="thread_existing")
+        await svc._execute(task)
+        run = svc.runs[0]
+        assert run.thread_id == "thread_existing"
+        svc._create_thread.assert_not_awaited()
+
+
+class TestWaitAndNotifySuccess:
+    @pytest.mark.asyncio
+    async def test_wait_and_notify_success(self):
+        svc = SchedulerService()
+        svc._check_thread_status = AsyncMock(return_value="completed")
+        svc._send_notification = AsyncMock()
+        task = _make_task(notification=ScheduleNotification(enabled=True))
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+        await svc._wait_and_notify(task, run)
+        assert run.status == "completed"
+        assert run.completed_at is not None
+        svc._send_notification.assert_awaited_once()
+
+
+class TestWaitAndNotifyTimeout:
+    @pytest.mark.asyncio
+    async def test_wait_and_notify_timeout(self):
+        svc = SchedulerService()
+        svc._check_thread_status = AsyncMock(return_value="running")
+        svc._send_notification = AsyncMock()
+        task = _make_task(
+            timeout_seconds=0,
+            notification=ScheduleNotification(enabled=False),
+        )
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+        await svc._wait_and_notify(task, run)
+        assert run.status == "failed"
+        assert run.error == "执行超时"
+
+
+class TestNotificationChannelService:
+    @pytest.mark.asyncio
+    async def test_notification_channel_service(self):
+        svc = SchedulerService()
+        task = _make_task(
+            notification=ScheduleNotification(
+                enabled=True,
+                channel="feishu",
+                target="chat_001",
+                include_summary=True,
+            ),
+        )
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="completed",
+            started_at=datetime.now(UTC),
+            result_summary="Done",
+        )
+        mock_bus = AsyncMock()
+        mock_channel = MagicMock()
+        mock_cs = MagicMock()
+        mock_cs.get_channel.return_value = mock_channel
+        mock_cs.bus = mock_bus
+        with patch("app.channels.service.get_channel_service", return_value=mock_cs):
+            await svc._send_notification(task, run)
+        mock_bus.publish_outbound.assert_awaited_once()
+
+
+class TestNotificationChannelUnavailable:
+    @pytest.mark.asyncio
+    async def test_notification_channel_unavailable(self):
+        svc = SchedulerService()
+        task = _make_task()
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="completed",
+            started_at=datetime.now(UTC),
+        )
+        with patch("app.channels.service.get_channel_service", return_value=None):
+            await svc._send_notification(task, run)
+
+
+class TestPersistenceSaveLoad:
+    @pytest.mark.asyncio
+    async def test_persistence_save_load(self):
+        persistence = SchedulePersistence()
+        persistence.save_task = AsyncMock()
+        persistence.load_task = AsyncMock()
+        persistence.save_run = AsyncMock()
+
+        task = _make_task()
+        await persistence.save_task(task)
+        persistence.save_task.assert_awaited_once_with(task)
+
+        persistence.load_task.return_value = task
+        loaded = await persistence.load_task("task_001")
+        assert loaded is not None
+        assert loaded.task_id == "task_001"
+        assert loaded.name == "Test Task"
+
+    @pytest.mark.asyncio
+    async def test_persistence_save_and_load_run(self):
+        persistence = SchedulePersistence()
+        persistence.save_run = AsyncMock()
+        persistence.load_runs = AsyncMock()
+
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="completed",
+            started_at=datetime.now(UTC),
+        )
+        await persistence.save_run(run)
+        persistence.save_run.assert_awaited_once_with(run)
+
+        persistence.load_runs.return_value = [run]
+        runs = await persistence.load_runs("task_001")
+        assert len(runs) == 1
+        assert runs[0].run_id == "run_1"
+
+
+class TestPersistenceRestartRecovery:
+    @pytest.mark.asyncio
+    async def test_persistence_restart_recovery(self):
+        mock_persistence = MagicMock(spec=SchedulePersistence)
+        mock_persistence.load_all_tasks = AsyncMock(return_value=[
+            _make_task(task_id="t1"),
+            _make_task(task_id="t2"),
+        ])
+        mock_persistence.save_task = AsyncMock()
+        mock_persistence.save_run = AsyncMock()
+        mock_persistence.delete_task = AsyncMock()
+
+        svc = SchedulerService(persistence=mock_persistence)
+        svc._tick_interval = 0
+
+        async def _mock_tick():
+            svc._running = False
+
+        svc._tick = _mock_tick
+        await svc.start()
+        assert len(svc.tasks) == 2
+        assert "t1" in svc.tasks
+        assert "t2" in svc.tasks
+
+
+class TestConcurrentExecutionLimit:
+    @pytest.mark.asyncio
+    async def test_concurrent_execution_limit(self):
+        svc = SchedulerService()
+        svc._create_thread = AsyncMock(return_value="thread_new")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+
+        for i in range(5):
+            task = _make_task(task_id=f"task_{i}", trigger=ScheduleTrigger(interval_seconds=300))
+            await svc.create_task(task)
+
+        assert len(svc.tasks) == 5
+
+
+class TestCronTimezoneShanghai:
+    def test_cron_timezone_shanghai(self):
+        svc = SchedulerService()
+        task = _make_task(trigger=ScheduleTrigger(cron="0 9 * * *", timezone="Asia/Shanghai"))
+        utc_1am = datetime(2026, 5, 25, 1, 0, tzinfo=UTC)
+        assert svc._should_trigger(task, utc_1am) is True
+
+
+class TestManualTrigger:
+    @pytest.mark.asyncio
+    async def test_manual_trigger(self):
+        svc = SchedulerService()
+        svc._create_thread = AsyncMock(return_value="thread_manual")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+        task = _make_task(status=ScheduleStatus.PAUSED)
+        await svc.create_task(task)
+        await svc._execute(task)
+        assert task.run_count == 1
+        assert len(svc.runs) == 1
+
+
+class TestPauseResumeFlow:
+    @pytest.mark.asyncio
+    async def test_pause_resume_flow(self):
+        svc = SchedulerService()
+        task = _make_task()
+        await svc.create_task(task)
+        assert svc.tasks["task_001"].status == ScheduleStatus.ACTIVE
+
+        await svc.pause_task("task_001")
+        assert svc.tasks["task_001"].status == ScheduleStatus.PAUSED
+
+        await svc.resume_task("task_001")
+        assert svc.tasks["task_001"].status == ScheduleStatus.ACTIVE
+
+
+class TestSchedulerConfigInAppConfig:
+    def test_scheduler_config_in_app_config(self):
+        config = AppConfig(
+            models=[],
+            sandbox={"use": "deerflow.sandbox.local:LocalSandboxProvider"},
+        )
+        assert isinstance(config.scheduler, SchedulerConfig)
+        assert config.scheduler.enabled is False
+        assert config.scheduler.tick_interval == 60
+        assert config.scheduler.max_concurrent_runs == 5
+        assert config.scheduler.default_timeout == 3600
+        assert config.scheduler.persist_to_db is True
+
+    def test_scheduler_config_custom_values(self):
+        config = AppConfig(
+            models=[],
+            sandbox={"use": "deerflow.sandbox.local:LocalSandboxProvider"},
+            scheduler=SchedulerConfig(
+                enabled=True,
+                tick_interval=30,
+                max_concurrent_runs=10,
+                default_timeout=7200,
+                persist_to_db=False,
+            ),
+        )
+        assert config.scheduler.enabled is True
+        assert config.scheduler.tick_interval == 30
+        assert config.scheduler.max_concurrent_runs == 10
+        assert config.scheduler.default_timeout == 7200
+        assert config.scheduler.persist_to_db is False
+
+
+class TestBackendMemoryPersistence:
+    @pytest.mark.asyncio
+    async def test_backend_memory_persistence(self):
+        with patch("deerflow.scheduler.persistence.get_session_factory", return_value=None):
+            persistence = SchedulePersistence()
+            task = _make_task()
+            await persistence.save_task(task)
+            loaded = await persistence.load_task("task_001")
+            assert loaded is None
+
+            all_tasks = await persistence.load_all_tasks()
+            assert all_tasks == []
+
+            await persistence.delete_task("task_001")
+
+            run = ScheduleRun(
+                run_id="run_1",
+                task_id="task_001",
+                thread_id="thread_1",
+                status="completed",
+                started_at=datetime.now(UTC),
+            )
+            await persistence.save_run(run)
+            runs = await persistence.load_runs("task_001")
+            assert runs == []
+
+
+class TestPersistenceWithServiceIntegration:
+    @pytest.mark.asyncio
+    async def test_create_task_persists(self):
+        mock_persistence = MagicMock(spec=SchedulePersistence)
+        mock_persistence.save_task = AsyncMock()
+        mock_persistence.load_all_tasks = AsyncMock(return_value=[])
+        mock_persistence.save_run = AsyncMock()
+        mock_persistence.delete_task = AsyncMock()
+
+        svc = SchedulerService(persistence=mock_persistence)
+        task = _make_task()
+        await svc.create_task(task)
+        mock_persistence.save_task.assert_awaited_once_with(task)
+
+    @pytest.mark.asyncio
+    async def test_update_task_persists(self):
+        mock_persistence = MagicMock(spec=SchedulePersistence)
+        mock_persistence.save_task = AsyncMock()
+        mock_persistence.load_all_tasks = AsyncMock(return_value=[])
+        mock_persistence.save_run = AsyncMock()
+        mock_persistence.delete_task = AsyncMock()
+
+        svc = SchedulerService(persistence=mock_persistence)
+        task = _make_task()
+        await svc.create_task(task)
+        mock_persistence.save_task.reset_mock()
+
+        await svc.update_task("task_001", {"name": "Updated"})
+        mock_persistence.save_task.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_delete_task_persists(self):
+        mock_persistence = MagicMock(spec=SchedulePersistence)
+        mock_persistence.save_task = AsyncMock()
+        mock_persistence.load_all_tasks = AsyncMock(return_value=[])
+        mock_persistence.save_run = AsyncMock()
+        mock_persistence.delete_task = AsyncMock()
+
+        svc = SchedulerService(persistence=mock_persistence)
+        task = _make_task()
+        await svc.create_task(task)
+
+        await svc.delete_task("task_001")
+        mock_persistence.delete_task.assert_awaited_once_with("task_001")
+
+    @pytest.mark.asyncio
+    async def test_execute_persists_task_and_run(self):
+        mock_persistence = MagicMock(spec=SchedulePersistence)
+        mock_persistence.save_task = AsyncMock()
+        mock_persistence.load_all_tasks = AsyncMock(return_value=[])
+        mock_persistence.save_run = AsyncMock()
+        mock_persistence.delete_task = AsyncMock()
+
+        svc = SchedulerService(persistence=mock_persistence)
+        svc._create_thread = AsyncMock(return_value="thread_abc")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+
+        task = _make_task()
+        await svc._execute(task)
+        mock_persistence.save_task.assert_awaited_once()
+        mock_persistence.save_run.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_wait_and_notify_persists_run_on_completion(self):
+        mock_persistence = MagicMock(spec=SchedulePersistence)
+        mock_persistence.save_task = AsyncMock()
+        mock_persistence.load_all_tasks = AsyncMock(return_value=[])
+        mock_persistence.save_run = AsyncMock()
+        mock_persistence.delete_task = AsyncMock()
+
+        svc = SchedulerService(persistence=mock_persistence)
+        svc._check_thread_status = AsyncMock(return_value="completed")
+        svc._send_notification = AsyncMock()
+
+        task = _make_task(notification=ScheduleNotification(enabled=False))
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+        await svc._wait_and_notify(task, run)
+        mock_persistence.save_run.assert_awaited_once_with(run)
+
+    @pytest.mark.asyncio
+    async def test_no_persistence_no_errors(self):
+        svc = SchedulerService(persistence=None)
+        svc._create_thread = AsyncMock(return_value="thread_abc")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+
+        task = _make_task()
+        await svc.create_task(task)
+        await svc._execute(task)
+        assert task.run_count == 1
