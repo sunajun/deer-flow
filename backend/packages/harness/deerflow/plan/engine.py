@@ -1,6 +1,22 @@
+from collections import deque
+from datetime import datetime
+
 from langchain_core.language_models import BaseChatModel
 
-from deerflow.plan.models import PlanDAG, PlanNode
+from deerflow.plan.models import NodeStatus, PlanDAG, PlanNode
+
+
+def _find_downstream(plan: PlanDAG, failed_nodes: list[PlanNode]) -> set[str]:
+    failed_ids = {n.id for n in failed_nodes}
+    downstream: set[str] = set()
+    queue: deque[str] = deque(failed_ids)
+    while queue:
+        current = queue.popleft()
+        for from_id, to_id in plan.edges:
+            if from_id == current and to_id not in failed_ids and to_id not in downstream:
+                downstream.add(to_id)
+                queue.append(to_id)
+    return downstream
 
 
 class PlanEngine:
@@ -8,13 +24,39 @@ class PlanEngine:
         self.llm = llm
 
     async def create_from_intent(self, messages: list) -> PlanDAG:
-        raise NotImplementedError
+        structured_llm = self.llm.with_structured_output(PlanDAG)
+        plan = await structured_llm.ainvoke(messages)
+        errors = self.validate_dag(plan)
+        if errors:
+            raise ValueError(f"生成的 Plan 校验失败：{'; '.join(errors)}")
+        return plan
 
     async def verify_acceptance(self, node: PlanNode) -> bool:
-        raise NotImplementedError
+        if not node.acceptance_criteria:
+            return True
+        criteria_text = "\n".join(f"- {c}" for c in node.acceptance_criteria)
+        prompt = (
+            f"请判断以下执行结果是否满足所有验收标准。\n"
+            f"验收标准：\n{criteria_text}\n"
+            f"执行结果：{node.result}\n"
+            f"请仅回答 YES 或 NO。"
+        )
+        response = await self.llm.ainvoke(prompt)
+        answer = response.content.strip().upper()
+        return answer.startswith("YES")
 
     async def reorchestrate(self, plan: PlanDAG, failed_nodes: list[PlanNode]) -> PlanDAG:
-        raise NotImplementedError
+        downstream = _find_downstream(plan, failed_nodes)
+        for node_id in downstream:
+            plan.nodes[node_id].status = NodeStatus.PENDING
+            plan.nodes[node_id].result = None
+            plan.nodes[node_id].error = None
+        for failed in failed_nodes:
+            plan.nodes[failed.id].status = NodeStatus.PENDING
+            plan.nodes[failed.id].result = None
+            plan.nodes[failed.id].error = None
+        plan.updated_at = datetime.now()
+        return plan
 
     @staticmethod
     def validate_dag(plan: PlanDAG) -> list[str]:

@@ -20,6 +20,7 @@ from app.gateway.routers import (
     mcp,
     memory,
     models,
+    plans,
     runs,
     skills,
     suggestions,
@@ -353,6 +354,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
+
+    # Plans API is mounted at /api/plans
+    app.include_router(plans.router)
 
     # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
     app.include_router(suggestions.router)
