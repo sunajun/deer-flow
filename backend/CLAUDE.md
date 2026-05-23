@@ -42,6 +42,13 @@ deer-flow/
 │   │           │   ├── builtins/      # general-purpose, bash agents
 │   │           │   ├── executor.py    # Background execution engine
 │   │           │   └── registry.py    # Agent registry
+│   │           ├── plan/              # Plan DAG orchestration system
+│   │           │   ├── models.py      # PlanDAG, PlanNode data models
+│   │           │   ├── engine.py      # PlanEngine (create, verify, reorchestrate)
+│   │           │   ├── graph.py       # PlanGraph independent StateGraph
+│   │           │   ├── graph_state.py # PlanState TypedDict
+│   │           │   ├── nodes.py       # Graph node functions
+│   │           │   └── plan_tool.py   # plan_tool for lead_agent
 │   │           ├── tools/builtins/    # Built-in tools (present_files, ask_clarification, view_image)
 │   │           ├── mcp/               # MCP integration (tools, cache, client)
 │   │           ├── models/            # Model factory with thinking/vision support
@@ -274,6 +281,34 @@ Proxied through nginx: `/api/langgraph/*` → Gateway LangGraph-compatible runti
 **Flow**: `task()` tool → `SubagentExecutor` → background thread → poll 5s → SSE events → result
 **Events**: `task_started`, `task_running`, `task_completed`/`task_failed`/`task_timed_out`
 
+### Plan DAG System (`packages/harness/deerflow/plan/`)
+
+**Architecture**: PlanGraph is an independent `StateGraph` (not a modification of `lead_agent`). The lead agent invokes PlanGraph through the `plan_tool` tool, which creates a separate execution context with its own `PlanState`.
+
+**Components**:
+- `models.py` - `PlanDAG` data model (DAG with nodes, edges, acceptance criteria) and `PlanNode` (status, dependencies, barrier type, context_from)
+- `engine.py` - `PlanEngine` (LLM-powered plan creation, acceptance verification, reorchestration) and `_find_downstream` (BFS downstream discovery)
+- `graph.py` - `PlanGraph` independent `StateGraph` with nodes: `plan_create` → `plan_execute_dag` → `plan_supervise` / `plan_reorchestrate`; conditional routing based on approval, completion, and failure states
+- `graph_state.py` - `PlanState` TypedDict (messages, plan, plan_approved, active_node_ids, plan_revised) with `merge_dict` reducer; independent from `ThreadState`
+- `nodes.py` - Graph node functions: `plan_create_node`, `plan_execute_dag_node` (parallel dispatch via `asyncio.gather`), `plan_supervise_node` (acceptance verification), `plan_reorchestrate_node`; `_dispatch_subagent` reuses `SubagentExecutor.execute_async`; `_build_subagent_context` assembles upstream results via `context_from`
+- `plan_tool.py` - `plan_tool` LangChain tool registered for lead agent; `PlanToolInput` schema (prompt, auto_approve); handles both sync and async event loop contexts
+
+**PlanGraph Flow**:
+1. `plan_create` - LLM generates `PlanDAG` from user intent; validates DAG (cycle detection, orphan nodes, missing deps)
+2. If `plan_approved` → `plan_execute_dag`; else → END
+3. `plan_execute_dag` - Dispatches ready nodes in parallel via `SubagentExecutor`; handles manual barrier waiting
+4. If failed nodes → `plan_reorchestrate`; if incomplete → `plan_supervise`; if complete → END
+5. `plan_supervise` - Verifies acceptance criteria for completed nodes; marks failures
+6. If failures found → `plan_reorchestrate`; else → `plan_execute_dag`
+7. `plan_reorchestrate` - Resets failed nodes and downstream to PENDING; if revised → `plan_execute_dag`; else → END
+
+**PlanState vs ThreadState**: `PlanState` is a separate TypedDict that does not share fields with `ThreadState`. The lead agent interacts with PlanGraph exclusively through `plan_tool`, which creates an isolated execution context. PlanGraph state (plan, approval, node IDs) does not leak into the thread's state.
+
+**Configuration** (`config.yaml` → `plan`):
+- `enabled` / `max_parallel_nodes` / `default_timeout` / `auto_approve` / `acceptance_verification` / `reorchestrate_max_retries`
+- Managed via `PlanConfig` + `load_plan_config_from_dict` singleton pattern (follows `TitleConfig` pattern)
+- Integrated into `AppConfig.plan` field; loaded in `_apply_singleton_configs`
+
 ### Tool System (`packages/harness/deerflow/tools/`)
 
 `get_available_tools(groups, include_mcp, model_name, subagent_enabled)` assembles:
@@ -440,6 +475,7 @@ Returns `{}` when Langfuse is not in the enabled providers — LangSmith-only de
 - `summarization` - Context summarization (enabled, trigger conditions, keep policy)
 - `subagents.enabled` - Master switch for subagent delegation
 - `memory` - Memory system (enabled, storage_path, debounce_seconds, model_name, max_facts, fact_confidence_threshold, injection_enabled, max_injection_tokens)
+- `plan` - Plan DAG orchestration (enabled, max_parallel_nodes, default_timeout, auto_approve, acceptance_verification, reorchestrate_max_retries)
 
 **`extensions_config.json`**:
 - `mcpServers` - Map of server name → config (enabled, type, command, args, env, url, headers, oauth, description)
