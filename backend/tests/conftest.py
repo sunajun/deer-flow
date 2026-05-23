@@ -228,3 +228,75 @@ def _auto_user_context(request):
         yield
     finally:
         reset_current_user(token)
+
+
+# ---------------------------------------------------------------------------
+# IM command integration test fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def mock_message_bus():
+    from app.channels.message_bus import MessageBus
+
+    bus = MessageBus()
+    published_outbound = []
+
+    async def _capture_outbound(msg):
+        published_outbound.append(msg)
+
+    bus.subscribe_outbound(_capture_outbound)
+    bus._test_published_outbound = published_outbound
+    return bus
+
+
+@pytest.fixture()
+def mock_channel_store(tmp_path):
+    from app.channels.store import ChannelStore
+
+    return ChannelStore(path=tmp_path / "im_test_store.json")
+
+
+@pytest.fixture()
+def mock_channel_manager(mock_message_bus, mock_channel_store):
+    from app.channels.manager import ChannelManager
+
+    mgr = ChannelManager(bus=mock_message_bus, store=mock_channel_store)
+    mgr._semaphore = asyncio.Semaphore(5)
+    return mgr
+
+
+@pytest.fixture()
+def sample_inbound_message():
+    from app.channels.message_bus import InboundMessage, InboundMessageType
+
+    def _make(text="/help", channel_name="feishu", **overrides):
+        msg = InboundMessage(
+            channel_name=channel_name,
+            chat_id="test-chat-1",
+            user_id="test-user-1",
+            text=text,
+            msg_type=InboundMessageType.COMMAND,
+        )
+        for k, v in overrides.items():
+            setattr(msg, k, v)
+        return msg
+
+    return _make
+
+
+@pytest.fixture()
+def all_commands():
+    from app.channels.commands import get_all_commands
+
+    return get_all_commands()
+
+
+@pytest.fixture()
+def all_formatters():
+    from app.channels.commands.formatters import _FORMATTERS
+
+    return {name: cls() for name, cls in _FORMATTERS.items()}
+
+
+import asyncio

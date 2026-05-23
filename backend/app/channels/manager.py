@@ -932,6 +932,21 @@ class ChannelManager:
 
     async def _handle_command(self, msg: InboundMessage) -> None:
         text = msg.text.strip()
+        if not text:
+            result = CommandResult(success=False, message="请输入命令，输入 /help 查看帮助")
+            formatter = get_formatter(msg.channel_name)
+            formatted_text = formatter.format_result(result)
+            outbound = OutboundMessage(
+                channel_name=msg.channel_name,
+                chat_id=msg.chat_id,
+                thread_id=self.store.get_thread_id(msg.channel_name, msg.chat_id) or "",
+                text=formatted_text,
+                thread_ts=msg.thread_ts,
+                metadata=_slim_metadata(msg.metadata),
+            )
+            await self.bus.publish_outbound(outbound)
+            return
+
         parts = text.split(maxsplit=1)
         cmd_name = parts[0].lower().lstrip("/")
         args = parts[1] if len(parts) > 1 else ""
