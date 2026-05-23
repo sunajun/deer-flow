@@ -11,7 +11,8 @@ from deerflow.agents.lead_agent.prompt import refresh_skills_system_prompt_cache
 from deerflow.config.app_config import AppConfig
 from deerflow.config.extensions_config import ExtensionsConfig, SkillStateConfig, get_extensions_config, reload_extensions_config
 from deerflow.skills import Skill
-from deerflow.skills.installer import SkillAlreadyExistsError
+from deerflow.skills.installer import SkillAlreadyExistsError, SkillSecurityScanError
+from deerflow.skills.manager import SkillManager
 from deerflow.skills.security_scanner import scan_skill_content
 from deerflow.skills.storage import get_or_new_skill_storage
 from deerflow.skills.types import SKILL_MD_FILE, SkillCategory
@@ -74,6 +75,45 @@ class SkillRollbackRequest(BaseModel):
     history_index: int = Field(default=-1, description="History entry index to restore from, defaulting to the latest change.")
 
 
+class SkillLifecycleInstallRequest(BaseModel):
+    skill_id: str = Field(..., description="Unique identifier for the skill to install")
+    thread_id: str = Field(..., description="The thread ID where the .skill file is located")
+    path: str = Field(..., description="Virtual path to the .skill file (e.g., mnt/user-data/outputs/my-skill.skill)")
+    version: str | None = Field(None, description="Version of the skill (defaults to latest)")
+
+
+class SkillLifecycleInstallResponse(BaseModel):
+    skill_id: str = Field(..., description="Installed skill identifier")
+    install_path: str = Field(..., description="Filesystem path where the skill was installed")
+
+
+class SkillEnableDisableRequest(BaseModel):
+    agent_id: str | None = Field(None, description="Optional agent ID to scope the enable/disable action")
+
+
+class SkillUpdateLifecycleRequest(BaseModel):
+    thread_id: str = Field(..., description="The thread ID where the .skill file is located")
+    path: str = Field(..., description="Virtual path to the updated .skill file")
+    version: str | None = Field(None, description="Version to update to (defaults to latest)")
+
+
+class SkillMarketEntry(BaseModel):
+    name: str = Field(..., description="Skill name")
+    description: str = Field(..., description="Skill description")
+    category: SkillCategory = Field(..., description="Category of the skill")
+    enabled: bool = Field(default=True, description="Whether this skill is enabled")
+    version: str | None = Field(None, description="Installed version")
+    installed_at: str | None = Field(None, description="ISO timestamp of installation")
+
+
+class SkillMarketResponse(BaseModel):
+    skills: list[SkillMarketEntry]
+
+
+class SkillCheckUpdatesResponse(BaseModel):
+    updates: list[dict]
+
+
 def _skill_to_response(skill: Skill) -> SkillResponse:
     """Convert a Skill object to a SkillResponse."""
     return SkillResponse(
@@ -98,6 +138,34 @@ async def list_skills(config: AppConfig = Depends(get_config)) -> SkillsListResp
     except Exception as e:
         logger.error(f"Failed to load skills: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to load skills: {str(e)}")
+
+
+@router.get(
+    "/skills/market",
+    response_model=SkillMarketResponse,
+    summary="Skill Market",
+    description="List all skills with lifecycle metadata (marketplace view).",
+)
+async def skill_market(config: AppConfig = Depends(get_config)) -> SkillMarketResponse:
+    try:
+        manager = SkillManager(skills_dir=config.skills.get_skills_path())
+        skills = await manager.list_skills()
+        return SkillMarketResponse(
+            skills=[
+                SkillMarketEntry(
+                    name=s["name"],
+                    description=s["description"],
+                    category=s["category"],
+                    enabled=s["enabled"],
+                    version=s.get("version"),
+                    installed_at=s.get("installed_at"),
+                )
+                for s in skills
+            ]
+        )
+    except Exception as e:
+        logger.error("Failed to list skill market: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to list skill market: {str(e)}")
 
 
 @router.post(
@@ -279,6 +347,22 @@ async def rollback_custom_skill(skill_name: str, request: SkillRollbackRequest, 
 
 
 @router.get(
+    "/skills/check-updates",
+    response_model=SkillCheckUpdatesResponse,
+    summary="Check Skill Updates",
+    description="Check for available skill updates.",
+)
+async def check_skill_updates(skill_id: str | None = None, config: AppConfig = Depends(get_config)) -> SkillCheckUpdatesResponse:
+    try:
+        manager = SkillManager(skills_dir=config.skills.get_skills_path())
+        updates = await manager.check_updates(skill_id)
+        return SkillCheckUpdatesResponse(updates=updates)
+    except Exception as e:
+        logger.error("Failed to check skill updates: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to check updates: {str(e)}")
+
+
+@router.get(
     "/skills/{skill_name}",
     response_model=SkillResponse,
     summary="Get Skill Details",
@@ -349,4 +433,101 @@ async def update_skill(skill_name: str, request: SkillUpdateRequest, config: App
         raise
     except Exception as e:
         logger.error(f"Failed to update skill {skill_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update skill: {str(e)}")
+
+
+@router.delete(
+    "/skills/{skill_id}",
+    summary="Uninstall Skill",
+    description="Uninstall a skill by removing its directory and config entry.",
+)
+async def uninstall_skill(skill_id: str, config: AppConfig = Depends(get_config)) -> dict[str, bool]:
+    try:
+        skill_id = skill_id.replace("\r\n", "").replace("\n", "")
+        manager = SkillManager(skills_dir=config.skills.get_skills_path())
+        await manager.uninstall_skill(skill_id)
+        await refresh_skills_system_prompt_cache_async()
+        return {"success": True}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to uninstall skill %s: %s", skill_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to uninstall skill: {str(e)}")
+
+
+@router.post(
+    "/skills/{skill_id}/enable",
+    summary="Enable Skill",
+    description="Enable a skill globally or for a specific agent.",
+)
+async def enable_skill(skill_id: str, request: SkillEnableDisableRequest | None = None, config: AppConfig = Depends(get_config)) -> dict[str, bool]:
+    try:
+        skill_id = skill_id.replace("\r\n", "").replace("\n", "")
+        manager = SkillManager(skills_dir=config.skills.get_skills_path())
+        agent_id = request.agent_id if request else None
+        await manager.enable_skill(skill_id, agent_id=agent_id)
+        await refresh_skills_system_prompt_cache_async()
+        return {"success": True}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to enable skill %s: %s", skill_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to enable skill: {str(e)}")
+
+
+@router.post(
+    "/skills/{skill_id}/disable",
+    summary="Disable Skill",
+    description="Disable a skill globally or for a specific agent.",
+)
+async def disable_skill(skill_id: str, request: SkillEnableDisableRequest | None = None, config: AppConfig = Depends(get_config)) -> dict[str, bool]:
+    try:
+        skill_id = skill_id.replace("\r\n", "").replace("\n", "")
+        manager = SkillManager(skills_dir=config.skills.get_skills_path())
+        agent_id = request.agent_id if request else None
+        await manager.disable_skill(skill_id, agent_id=agent_id)
+        await refresh_skills_system_prompt_cache_async()
+        return {"success": True}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to disable skill %s: %s", skill_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to disable skill: {str(e)}")
+
+
+@router.post(
+    "/skills/{skill_id}/update",
+    response_model=SkillLifecycleInstallResponse,
+    summary="Update Skill",
+    description="Update a skill by reinstalling from a new .skill archive.",
+)
+async def update_skill_lifecycle(skill_id: str, request: SkillUpdateLifecycleRequest, config: AppConfig = Depends(get_config)) -> SkillLifecycleInstallResponse:
+    try:
+        skill_id = skill_id.replace("\r\n", "").replace("\n", "")
+        archive_path = resolve_thread_virtual_path(request.thread_id, request.path)
+        manager = SkillManager(skills_dir=config.skills.get_skills_path())
+        result = await manager.update_skill(skill_id, archive_path=archive_path, version=request.version)
+        await refresh_skills_system_prompt_cache_async()
+        return SkillLifecycleInstallResponse(
+            skill_id=result["skill_id"],
+            install_path=result["install_path"],
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except SkillAlreadyExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except SkillSecurityScanError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to update skill %s: %s", skill_id, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update skill: {str(e)}")
