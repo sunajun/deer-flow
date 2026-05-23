@@ -29,6 +29,7 @@ from deerflow.agents.memory.summarization_hook import memory_flush_hook
 from deerflow.agents.middlewares.clarification_middleware import ClarificationMiddleware
 from deerflow.agents.middlewares.goal_middleware import GoalTrackerMiddleware
 from deerflow.agents.middlewares.loop_detection_middleware import LoopDetectionMiddleware
+from deerflow.agents.middlewares.scene_middleware import SceneMiddleware
 from deerflow.agents.middlewares.memory_middleware import MemoryMiddleware
 from deerflow.agents.middlewares.safety_finish_reason_middleware import SafetyFinishReasonMiddleware
 from deerflow.agents.middlewares.subagent_limit_middleware import SubagentLimitMiddleware
@@ -335,6 +336,13 @@ def _build_middlewares(
     loop_detection_config = resolved_app_config.loop_detection
     if loop_detection_config.enabled:
         middlewares.append(LoopDetectionMiddleware.from_config(loop_detection_config))
+
+    # SceneMiddleware — filter tools by active scene, auto-deactivate, intent detection
+    scene_config = getattr(resolved_app_config, "scenes", None)
+    if scene_config and getattr(scene_config, "enabled", False):
+        intent_keywords = getattr(scene_config, "intent_keywords", None)
+        custom_middlewares = custom_middlewares or []
+        custom_middlewares.append(SceneMiddleware(intent_keywords=intent_keywords))
 
     # Inject custom middlewares before ClarificationMiddleware
     if custom_middlewares:
