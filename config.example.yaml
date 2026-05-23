@@ -890,6 +890,20 @@ skill_evolution:
   moderation_model_name: null # Model for LLM-based security scanning (null = use default model)
 
 # ============================================================================
+# Marketplace Configuration
+# ============================================================================
+# Skill marketplace for discovering, installing, and updating community skills.
+# The index is fetched from a GitHub repository hosting a skills-index.json file.
+
+# marketplace:
+#   enabled: true
+#   index_url: "https://raw.githubusercontent.com/example/deerflow-skills/main/skills-index.json"
+#   cache_ttl: 3600
+#   auto_update_check: true
+#   trusted_sources:
+#     - "github.com/example"
+
+# ============================================================================
 # Checkpointer Configuration (DEPRECATED — use `database` instead)
 # ============================================================================
 # Legacy standalone checkpointer config. Kept for backward compatibility.
