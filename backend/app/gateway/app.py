@@ -197,6 +197,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("No IM channels configured or channel service failed to start")
 
+        # Validate scene registry tool IDs against available tools
+        try:
+            from deerflow.scene.registry import get_scene_registry
+            from deerflow.tools import get_available_tools
+
+            registry = get_scene_registry()
+            tool_names = {t.name for t in get_available_tools(include_mcp=False, app_config=startup_config)}
+            missing = registry.validate_tool_ids(tool_names)
+            if missing:
+                logger.warning("Scene registry references unknown tool IDs: %s", missing)
+            else:
+                logger.info("Scene registry tool IDs validated successfully")
+        except Exception:
+            logger.exception("Failed to validate scene registry tool IDs")
+
         yield
 
         # Stop channel service on shutdown (bounded to prevent worker hang)

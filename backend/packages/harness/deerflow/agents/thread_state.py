@@ -38,11 +38,16 @@ def merge_viewed_images(existing: dict[str, ViewedImageData] | None, new: dict[s
         return new or {}
     if new is None:
         return existing
-    # Special case: empty dict means clear all viewed images
     if len(new) == 0:
         return {}
-    # Merge dictionaries, new values override existing ones for same keys
     return {**existing, **new}
+
+
+def merge_scene_state(existing: dict | None, new: dict | None) -> dict:
+    """Reducer for scene_state - new dict fully replaces existing."""
+    if new is None:
+        return existing or {}
+    return new
 
 
 class ThreadState(AgentState):
@@ -53,6 +58,7 @@ class ThreadState(AgentState):
     todos: NotRequired[list | None]
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]
+    scene_state: Annotated[dict, merge_scene_state]
     goal_snapshot: NotRequired[dict | None]
     plan: NotRequired[dict | None]
     plan_approved: NotRequired[bool | None]
