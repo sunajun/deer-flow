@@ -54,3 +54,6 @@ class ThreadState(AgentState):
     uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]
     goal_snapshot: NotRequired[dict | None]
+    plan: NotRequired[dict | None]
+    plan_approved: NotRequired[bool | None]
+    active_node_ids: NotRequired[list[str] | None]
