@@ -118,6 +118,7 @@ export interface Translations {
     demoChats: string;
     agents: string;
     tasks: string;
+    governance: string;
   };
 
   // Agents

@@ -168,6 +168,7 @@ export const zhCN: Translations = {
     demoChats: "演示对话",
     agents: "智能体",
     tasks: "任务",
+    governance: "治理",
   },
 
   // Agents
