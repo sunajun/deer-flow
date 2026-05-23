@@ -1,9 +1,8 @@
 """Tests for GoalSnapshot models and GoalTrackerMiddleware."""
 
 from types import SimpleNamespace
-from unittest import mock
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from deerflow.agents.middlewares.goal_middleware import GoalTrackerMiddleware
 from deerflow.goal.models import GoalSnapshot, ProblemStatus, SubProblem
@@ -277,3 +276,128 @@ def test_on_direction_change_no_snapshot():
     state = {}
     result = mw.on_direction_change(state, "New direction")
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# after_model tests
+# ---------------------------------------------------------------------------
+
+
+def test_after_model_detects_direction_change():
+    mw = GoalTrackerMiddleware()
+    snapshot = GoalSnapshot(**_make_snapshot())
+    ai_msg = AIMessage(
+        content="",
+        tool_calls=[{"name": "change_direction", "args": {"new_direction": "Build a GraphQL API"}, "id": "tc1"}],
+    )
+    state = {
+        "messages": [HumanMessage(content="hi"), ai_msg],
+        "goal_snapshot": snapshot.model_dump(),
+    }
+    result = mw.after_model(state, _fake_runtime())
+    assert result is not None
+    updated = GoalSnapshot.model_validate(result["goal_snapshot"])
+    assert updated.core_goal == "Build a GraphQL API"
+    assert updated.alignment_version == 2
+
+
+def test_after_model_no_tool_calls():
+    mw = GoalTrackerMiddleware()
+    snapshot = GoalSnapshot(**_make_snapshot())
+    ai_msg = AIMessage(content="I will help you.")
+    state = {
+        "messages": [HumanMessage(content="hi"), ai_msg],
+        "goal_snapshot": snapshot.model_dump(),
+    }
+    result = mw.after_model(state, _fake_runtime())
+    assert result is None
+
+
+def test_after_model_unrelated_tool_call():
+    mw = GoalTrackerMiddleware()
+    snapshot = GoalSnapshot(**_make_snapshot())
+    ai_msg = AIMessage(
+        content="",
+        tool_calls=[{"name": "write_todos", "args": {"todos": []}, "id": "tc1"}],
+    )
+    state = {
+        "messages": [HumanMessage(content="hi"), ai_msg],
+        "goal_snapshot": snapshot.model_dump(),
+    }
+    result = mw.after_model(state, _fake_runtime())
+    assert result is None
+
+
+def test_after_model_no_messages():
+    mw = GoalTrackerMiddleware()
+    state = {"messages": []}
+    result = mw.after_model(state, _fake_runtime())
+    assert result is None
+
+
+def test_after_model_no_ai_message():
+    mw = GoalTrackerMiddleware()
+    state = {"messages": [HumanMessage(content="hi")]}
+    result = mw.after_model(state, _fake_runtime())
+    assert result is None
+
+
+def test_after_model_change_direction_missing_args():
+    mw = GoalTrackerMiddleware()
+    snapshot = GoalSnapshot(**_make_snapshot())
+    ai_msg = AIMessage(
+        content="",
+        tool_calls=[{"name": "change_direction", "args": {}, "id": "tc1"}],
+    )
+    state = {
+        "messages": [HumanMessage(content="hi"), ai_msg],
+        "goal_snapshot": snapshot.model_dump(),
+    }
+    result = mw.after_model(state, _fake_runtime())
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# alignment version & direction change history tests
+# ---------------------------------------------------------------------------
+
+
+def test_alignment_version_increments():
+    mw = GoalTrackerMiddleware()
+    snapshot = GoalSnapshot(**_make_snapshot())
+    state = {"goal_snapshot": snapshot.model_dump()}
+    result = mw.on_direction_change(state, "Direction 2")
+    state = {"goal_snapshot": result["goal_snapshot"]}
+    result = mw.on_direction_change(state, "Direction 3")
+    state = {"goal_snapshot": result["goal_snapshot"]}
+    result = mw.on_direction_change(state, "Direction 4")
+    updated = GoalSnapshot.model_validate(result["goal_snapshot"])
+    assert updated.alignment_version == 4
+
+
+def test_direction_change_history():
+    mw = GoalTrackerMiddleware()
+    snapshot = GoalSnapshot(**_make_snapshot())
+    state = {"goal_snapshot": snapshot.model_dump()}
+    directions = ["Direction A", "Direction B", "Direction C"]
+    for d in directions:
+        result = mw.on_direction_change(state, d)
+        state = {"goal_snapshot": result["goal_snapshot"]}
+    updated = GoalSnapshot.model_validate(state["goal_snapshot"])
+    assert len(updated.direction_changes) == 3
+    assert updated.direction_changes[0]["from"] == "Build a REST API"
+    assert updated.direction_changes[0]["to"] == "Direction A"
+    assert updated.direction_changes[1]["from"] == "Direction A"
+    assert updated.direction_changes[1]["to"] == "Direction B"
+    assert updated.direction_changes[2]["from"] == "Direction B"
+    assert updated.direction_changes[2]["to"] == "Direction C"
+
+
+def test_on_direction_change_preserves_dropped_subproblems():
+    mw = GoalTrackerMiddleware()
+    snapshot = GoalSnapshot(**_make_snapshot())
+    snapshot.sub_problems[0].status = ProblemStatus.DROPPED
+    state = {"goal_snapshot": snapshot.model_dump()}
+    result = mw.on_direction_change(state, "New direction")
+    updated = GoalSnapshot.model_validate(result["goal_snapshot"])
+    assert updated.sub_problems[0].status == ProblemStatus.DROPPED

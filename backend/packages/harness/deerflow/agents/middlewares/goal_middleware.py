@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import override
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
 
 from deerflow.agents.thread_state import ThreadState
@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class GoalTrackerMiddleware(AgentMiddleware):
-
     def _get_snapshot(self, state: ThreadState) -> GoalSnapshot | None:
         raw = state.get("goal_snapshot")
         if raw is None:
@@ -59,11 +58,13 @@ class GoalTrackerMiddleware(AgentMiddleware):
         snapshot = self._get_snapshot(state)
         if snapshot is None:
             return {}
-        snapshot.direction_changes.append({
-            "from": snapshot.core_goal,
-            "to": new_direction,
-            "at": datetime.now().isoformat(),
-        })
+        snapshot.direction_changes.append(
+            {
+                "from": snapshot.core_goal,
+                "to": new_direction,
+                "at": datetime.now().isoformat(),
+            }
+        )
         snapshot.core_goal = new_direction
         snapshot.alignment_version += 1
         snapshot.last_aligned_at = datetime.now()
@@ -107,3 +108,20 @@ class GoalTrackerMiddleware(AgentMiddleware):
     @override
     async def abefore_agent(self, state: ThreadState, runtime: Runtime) -> dict | None:
         return self.before_agent(state, runtime)
+
+    @override
+    def after_model(self, state: ThreadState, runtime: Runtime) -> dict | None:
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+        last_ai = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+        if last_ai is None or not last_ai.tool_calls:
+            return None
+        for tc in last_ai.tool_calls:
+            if tc.get("name") == "change_direction" and tc.get("args", {}).get("new_direction"):
+                return self.on_direction_change(state, tc["args"]["new_direction"])
+        return None
+
+    @override
+    async def aafter_model(self, state: ThreadState, runtime: Runtime) -> dict | None:
+        return self.after_model(state, runtime)
