@@ -1159,3 +1159,36 @@ run_events:
 #   max_concurrent_runs: 5     # Maximum number of concurrent scheduled task runs
 #   default_timeout: 3600      # Default timeout in seconds for each scheduled run
 #   persist_to_db: true        # Persist scheduled tasks and run records to database
+
+# ============================================================================
+# Governance Configuration
+# ============================================================================
+# Role-based permission governance for controlling agent access to scenes and tools.
+# When enabled, the PermissionMiddleware intercepts tool calls and checks
+# the user's role against the configured permission rules.
+
+# governance:
+#   enabled: true
+#   default_role: user
+#   user_roles:
+#     admin:
+#       allowed_scenes: ["*"]
+#       allowed_tools: ["*"]
+#       max_parallel_sessions: 10
+#       can_create_agents: true
+#       can_manage_skills: true
+#       can_schedule_tasks: true
+#     user:
+#       allowed_scenes: ["conversation", "planning", "file_operation"]
+#       allowed_tools: ["*", "!agent_manage", "!skill_manage"]
+#       max_parallel_sessions: 3
+#       can_create_agents: false
+#       can_manage_skills: false
+#       can_schedule_tasks: true
+#     guest:
+#       allowed_scenes: ["conversation"]
+#       allowed_tools: ["chat", "clarify"]
+#       max_parallel_sessions: 1
+#       can_create_agents: false
+#       can_manage_skills: false
+#       can_schedule_tasks: false

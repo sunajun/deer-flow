@@ -18,6 +18,7 @@ from app.gateway.routers import (
     auth,
     channels,
     feedback,
+    governance,
     mcp,
     memory,
     models,
@@ -431,6 +432,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Schedules API is mounted at /api/schedules
     app.include_router(schedules.router)
+
+    # Governance API is mounted at /api/governance
+    app.include_router(governance.router)
 
     # Assistants compatibility API (LangGraph Platform stub)
     app.include_router(assistants_compat.router)
