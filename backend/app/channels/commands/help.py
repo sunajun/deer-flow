@@ -64,6 +64,10 @@ class HelpCommand(BaseCommand):
                 lines.append(f"  /{cmd.name}{alias_str} — {cmd.description}")
             lines.append("")
 
+        lines.append("**其他**")
+        lines.append("  /bootstrap — 启动引导会话")
+        lines.append("")
+
         return CommandResult(
             success=True,
             message="\n".join(lines).strip(),

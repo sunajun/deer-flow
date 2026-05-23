@@ -102,3 +102,11 @@ for _cmd in ALL_COMMANDS:
 
 def find_command(name: str) -> BaseCommand | None:
     return COMMAND_REGISTRY.get(name)
+
+
+def get_command(name: str) -> BaseCommand | None:
+    return COMMAND_REGISTRY.get(name)
+
+
+def get_all_commands() -> list[BaseCommand]:
+    return list(ALL_COMMANDS)

@@ -14,7 +14,9 @@ from typing import Any
 import httpx
 from langgraph_sdk.errors import ConflictError
 
-from app.channels.commands import KNOWN_CHANNEL_COMMANDS
+from app.channels.commands import get_command, get_all_commands
+from app.channels.commands.base import CommandResult
+from app.channels.commands.formatters import get_formatter
 from app.channels.message_bus import InboundMessage, InboundMessageType, MessageBus, OutboundMessage, ResolvedAttachment
 from app.channels.store import ChannelStore
 from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
@@ -931,59 +933,57 @@ class ChannelManager:
     async def _handle_command(self, msg: InboundMessage) -> None:
         text = msg.text.strip()
         parts = text.split(maxsplit=1)
-        command = parts[0].lower().lstrip("/")
+        cmd_name = parts[0].lower().lstrip("/")
+        args = parts[1] if len(parts) > 1 else ""
 
-        if command == "bootstrap":
+        if cmd_name == "bootstrap":
             from dataclasses import replace as _dc_replace
 
-            chat_text = parts[1] if len(parts) > 1 else "Initialize workspace"
+            chat_text = args if args else "Initialize workspace"
             chat_msg = _dc_replace(msg, text=chat_text, msg_type=InboundMessageType.CHAT)
             await self._handle_chat(chat_msg, extra_context={"is_bootstrap": True})
             return
 
-        if command == "new":
-            # Create a new thread through Gateway
-            client = self._get_client()
-            thread = await client.threads.create()
-            new_thread_id = thread["thread_id"]
-            self.store.set_thread_id(
-                msg.channel_name,
-                msg.chat_id,
-                new_thread_id,
-                topic_id=msg.topic_id,
-                user_id=msg.user_id,
-            )
-            reply = "New conversation started."
-        elif command == "status":
-            thread_id = self.store.get_thread_id(msg.channel_name, msg.chat_id, topic_id=msg.topic_id)
-            reply = f"Active thread: {thread_id}" if thread_id else "No active conversation."
-        elif command == "models":
-            reply = await self._fetch_gateway("/api/models", "models")
-        elif command == "memory":
-            reply = await self._fetch_gateway("/api/memory", "memory")
-        elif command == "help":
-            reply = (
-                "Available commands:\n"
-                "/bootstrap — Start a bootstrap session (enables agent setup)\n"
-                "/new — Start a new conversation\n"
-                "/status — Show current thread info\n"
-                "/models — List available models\n"
-                "/memory — Show memory status\n"
-                "/help — Show this help"
-            )
+        cmd_name = self._normalize_command(cmd_name, args)
+        cmd = get_command(cmd_name)
+
+        if cmd:
+            try:
+                message_dict = {
+                    "channel_name": msg.channel_name,
+                    "chat_id": msg.chat_id,
+                    "user_id": msg.user_id,
+                    "topic_id": msg.topic_id,
+                    "_store": self.store,
+                    "_manager": self,
+                }
+                result = await cmd.execute(message_dict, args)
+            except Exception as e:
+                result = CommandResult(success=False, message=f"命令执行失败: {e}")
         else:
-            available = " | ".join(sorted(KNOWN_CHANNEL_COMMANDS))
-            reply = f"Unknown command: /{command}. Available commands: {available}"
+            result = CommandResult(success=False, message=f"未知命令 `/{cmd_name}`，输入 /help 查看帮助")
+
+        formatter = get_formatter(msg.channel_name)
+        formatted_text = formatter.format_result(result)
 
         outbound = OutboundMessage(
             channel_name=msg.channel_name,
             chat_id=msg.chat_id,
             thread_id=self.store.get_thread_id(msg.channel_name, msg.chat_id) or "",
-            text=reply,
+            text=formatted_text,
             thread_ts=msg.thread_ts,
             metadata=_slim_metadata(msg.metadata),
         )
         await self.bus.publish_outbound(outbound)
+
+    def _normalize_command(self, cmd_name: str, args: str) -> str:
+        compound_prefixes = ("claude", "task", "schedule", "skill")
+        if cmd_name in compound_prefixes and args:
+            first_arg = args.split(maxsplit=1)[0].lower()
+            combined = f"{cmd_name}-{first_arg}"
+            if get_command(combined) is not None:
+                return combined
+        return cmd_name
 
     async def _fetch_gateway(self, path: str, kind: str) -> str:
         """Fetch data from the Gateway API for command responses."""
