@@ -175,6 +175,7 @@ export const enUS: Translations = {
     agents: "Agents",
     tasks: "Tasks",
     governance: "Governance",
+    marketplace: "Marketplace",
   },
 
   // Agents

@@ -20,6 +20,7 @@ from app.gateway.routers import (
     claude_sessions,
     feedback,
     governance,
+    marketplace,
     mcp,
     memory,
     models,
@@ -370,6 +371,10 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
                 "name": "claude-sessions",
                 "description": "Manage Claude Code multi-session lifecycle (create, stream, pause, resume, terminate)",
             },
+            {
+                "name": "marketplace",
+                "description": "Browse, install, update, and uninstall skills from the marketplace",
+            },
         ],
     )
 
@@ -440,6 +445,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Governance API is mounted at /api/governance
     app.include_router(governance.router)
+
+    # Marketplace API is mounted at /api/marketplace
+    app.include_router(marketplace.router)
 
     # Claude Sessions API is mounted at /api/claude-sessions
     app.include_router(claude_sessions.router)

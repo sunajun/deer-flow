@@ -169,6 +169,7 @@ export const zhCN: Translations = {
     agents: "智能体",
     tasks: "任务",
     governance: "治理",
+    marketplace: "技能市场",
   },
 
   // Agents

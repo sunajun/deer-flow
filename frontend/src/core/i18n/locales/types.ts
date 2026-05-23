@@ -119,6 +119,7 @@ export interface Translations {
     agents: string;
     tasks: string;
     governance: string;
+    marketplace: string;
   };
 
   // Agents
