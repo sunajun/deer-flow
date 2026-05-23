@@ -4,6 +4,7 @@ from langchain.tools import BaseTool
 
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
+from deerflow.plan.plan_tool import plan_tool
 from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.tools.builtins import ask_clarification_tool, present_file_tool, task_tool, view_image_tool
@@ -19,7 +20,7 @@ BUILTIN_TOOLS = [
 
 SUBAGENT_TOOLS = [
     task_tool,
-    # task_status_tool is no longer exposed to LLM (backend handles polling internally)
+    plan_tool,
 ]
 
 
@@ -98,7 +99,7 @@ def get_available_tools(
     # Add subagent tools only if enabled via runtime parameter
     if subagent_enabled:
         builtin_tools.extend(SUBAGENT_TOOLS)
-        logger.info("Including subagent tools (task)")
+        logger.info("Including subagent tools (task, plan)")
 
     # If no model_name specified, use the first model (default)
     if model_name is None and config.models:
