@@ -1,9 +1,16 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from deerflow.scheduler.models import ScheduledTask, ScheduleStatus, ScheduleTrigger
-from deerflow.scheduler.service import SchedulerService
+from deerflow.scheduler.models import (
+    ScheduledTask,
+    ScheduleNotification,
+    ScheduleRun,
+    ScheduleStatus,
+    ScheduleTrigger,
+)
+from deerflow.scheduler.service import SchedulerService, get_scheduler_service, reset_scheduler_service
 
 
 def _make_task(**overrides) -> ScheduledTask:
@@ -153,10 +160,15 @@ class TestIntervalFirstRun:
     @pytest.mark.asyncio
     async def test_interval_first_run_triggers(self):
         svc = SchedulerService()
+        svc._create_thread = AsyncMock(return_value="thread_123")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
         task = _make_task(trigger=ScheduleTrigger(interval_seconds=300))
         await svc.create_task(task)
         await svc._tick()
         assert task.run_count == 1
+        svc._create_thread.assert_awaited_once()
+        svc._send_message.assert_awaited_once()
 
 
 class TestCronNoDuplicateFire:
@@ -262,3 +274,271 @@ class TestStartStop:
         svc._running = True
         await svc.stop()
         assert svc._running is False
+
+
+class TestExecute:
+    @pytest.mark.asyncio
+    async def test_execute_creates_thread_and_sends_message(self):
+        svc = SchedulerService()
+        svc._create_thread = AsyncMock(return_value="thread_abc")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+        task = _make_task()
+        await svc._execute(task)
+        assert task.run_count == 1
+        assert len(svc.runs) == 1
+        run = svc.runs[0]
+        assert run.thread_id == "thread_abc"
+        assert run.status == "running"
+        assert run.task_id == "task_001"
+        svc._create_thread.assert_awaited_once_with("hello")
+        svc._send_message.assert_awaited_once_with("thread_abc", "hello")
+
+    @pytest.mark.asyncio
+    async def test_execute_reuses_thread(self):
+        svc = SchedulerService()
+        svc._create_thread = AsyncMock(return_value="thread_new")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+        task = _make_task(reuse_thread=True, thread_id="thread_existing")
+        await svc._execute(task)
+        run = svc.runs[0]
+        assert run.thread_id == "thread_existing"
+        svc._create_thread.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_execute_creates_new_thread_when_no_existing(self):
+        svc = SchedulerService()
+        svc._create_thread = AsyncMock(return_value="thread_new")
+        svc._send_message = AsyncMock()
+        svc._wait_and_notify = AsyncMock()
+        task = _make_task(reuse_thread=True, thread_id=None)
+        await svc._execute(task)
+        run = svc.runs[0]
+        assert run.thread_id == "thread_new"
+        svc._create_thread.assert_awaited_once()
+
+
+class TestWaitAndNotify:
+    @pytest.mark.asyncio
+    async def test_wait_completes_on_success(self):
+        svc = SchedulerService()
+        svc._check_thread_status = AsyncMock(return_value="completed")
+        svc._send_notification = AsyncMock()
+        task = _make_task(notification=ScheduleNotification(enabled=False))
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+        await svc._wait_and_notify(task, run)
+        assert run.status == "completed"
+        assert run.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_wait_completes_on_failure(self):
+        svc = SchedulerService()
+        svc._check_thread_status = AsyncMock(return_value="failed")
+        svc._send_notification = AsyncMock()
+        task = _make_task(notification=ScheduleNotification(enabled=False))
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+        await svc._wait_and_notify(task, run)
+        assert run.status == "failed"
+        assert run.completed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_wait_timeout(self):
+        svc = SchedulerService()
+        svc._check_thread_status = AsyncMock(return_value="running")
+        svc._send_notification = AsyncMock()
+        task = _make_task(
+            timeout_seconds=0,
+            notification=ScheduleNotification(enabled=False),
+        )
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+        await svc._wait_and_notify(task, run)
+        assert run.status == "failed"
+        assert run.error == "执行超时"
+
+    @pytest.mark.asyncio
+    async def test_sends_notification_when_enabled(self):
+        svc = SchedulerService()
+        svc._check_thread_status = AsyncMock(return_value="completed")
+        svc._send_notification = AsyncMock()
+        task = _make_task(notification=ScheduleNotification(enabled=True))
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="running",
+            started_at=datetime.now(UTC),
+        )
+        await svc._wait_and_notify(task, run)
+        svc._send_notification.assert_awaited_once_with(task, run)
+
+
+class TestSendNotification:
+    @pytest.mark.asyncio
+    async def test_skips_when_channel_service_unavailable(self):
+        svc = SchedulerService()
+        task = _make_task()
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="completed",
+            started_at=datetime.now(UTC),
+        )
+        with patch("app.channels.service.get_channel_service", return_value=None):
+            await svc._send_notification(task, run)
+
+    @pytest.mark.asyncio
+    async def test_skips_when_channel_not_found(self):
+        svc = SchedulerService()
+        task = _make_task()
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="completed",
+            started_at=datetime.now(UTC),
+        )
+        mock_cs = MagicMock()
+        mock_cs.get_channel.return_value = None
+        with patch("app.channels.service.get_channel_service", return_value=mock_cs):
+            await svc._send_notification(task, run)
+        mock_cs.get_channel.assert_called_once_with("feishu")
+
+    @pytest.mark.asyncio
+    async def test_sends_message_via_channel(self):
+        svc = SchedulerService()
+        task = _make_task(
+            notification=ScheduleNotification(
+                enabled=True,
+                channel="feishu",
+                target="chat_001",
+                include_summary=True,
+            ),
+        )
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="completed",
+            started_at=datetime.now(UTC),
+            result_summary="All done",
+        )
+        mock_bus = AsyncMock()
+        mock_channel = MagicMock()
+        mock_cs = MagicMock()
+        mock_cs.get_channel.return_value = mock_channel
+        mock_cs.bus = mock_bus
+        with patch("app.channels.service.get_channel_service", return_value=mock_cs):
+            await svc._send_notification(task, run)
+        mock_bus.publish_outbound.assert_awaited_once()
+        outbound = mock_bus.publish_outbound.call_args[0][0]
+        assert outbound.channel_name == "feishu"
+        assert outbound.chat_id == "chat_001"
+        assert "定时任务" in outbound.text
+        assert "completed" in outbound.text
+
+    @pytest.mark.asyncio
+    async def test_sends_default_message_without_summary(self):
+        svc = SchedulerService()
+        task = _make_task(
+            notification=ScheduleNotification(
+                enabled=True,
+                channel="feishu",
+                target="chat_001",
+                include_summary=True,
+            ),
+        )
+        run = ScheduleRun(
+            run_id="run_1",
+            task_id="task_001",
+            thread_id="thread_1",
+            status="completed",
+            started_at=datetime.now(UTC),
+            result_summary=None,
+        )
+        mock_bus = AsyncMock()
+        mock_channel = MagicMock()
+        mock_cs = MagicMock()
+        mock_cs.get_channel.return_value = mock_channel
+        mock_cs.bus = mock_bus
+        with patch("app.channels.service.get_channel_service", return_value=mock_cs):
+            await svc._send_notification(task, run)
+        outbound = mock_bus.publish_outbound.call_args[0][0]
+        assert outbound.text == "任务执行完成"
+
+
+class TestCheckThreadStatus:
+    @pytest.mark.asyncio
+    async def test_returns_completed_status(self):
+        svc = SchedulerService()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [{"status": "completed"}]
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch("deerflow.scheduler.service.httpx.AsyncClient", return_value=mock_client):
+            status = await svc._check_thread_status("thread_1")
+        assert status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_returns_running_on_empty_runs(self):
+        svc = SchedulerService()
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = []
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch("deerflow.scheduler.service.httpx.AsyncClient", return_value=mock_client):
+            status = await svc._check_thread_status("thread_1")
+        assert status == "running"
+
+    @pytest.mark.asyncio
+    async def test_returns_running_on_exception(self):
+        svc = SchedulerService()
+        mock_client = AsyncMock()
+        mock_client.get.side_effect = Exception("connection error")
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch("deerflow.scheduler.service.httpx.AsyncClient", return_value=mock_client):
+            status = await svc._check_thread_status("thread_1")
+        assert status == "running"
+
+
+class TestSingletonAccess:
+    def test_get_scheduler_service_creates_singleton(self):
+        reset_scheduler_service()
+        svc = get_scheduler_service()
+        assert isinstance(svc, SchedulerService)
+        svc2 = get_scheduler_service()
+        assert svc is svc2
+        reset_scheduler_service()
+
+    def test_reset_scheduler_service(self):
+        svc = get_scheduler_service()
+        reset_scheduler_service()
+        svc2 = get_scheduler_service()
+        assert svc is not svc2
+        reset_scheduler_service()

@@ -23,6 +23,7 @@ from app.gateway.routers import (
     plans,
     runs,
     scenes,
+    schedules,
     skills,
     suggestions,
     tasks,
@@ -214,7 +215,36 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception:
             logger.exception("Failed to validate scene registry tool IDs")
 
+        # Start SchedulerService if enabled
+        scheduler_task = None
+        try:
+            from deerflow.scheduler.service import get_scheduler_service
+
+            scheduler = get_scheduler_service()
+            scheduler_config = getattr(startup_config, "scheduler", None)
+            if scheduler_config and getattr(scheduler_config, "enabled", False):
+                scheduler_task = asyncio.create_task(scheduler.start())
+                logger.info("SchedulerService started")
+        except Exception:
+            logger.exception("Failed to start SchedulerService")
+
         yield
+
+        # Stop SchedulerService on shutdown
+        if scheduler_task is not None:
+            try:
+                from deerflow.scheduler.service import get_scheduler_service
+
+                scheduler = get_scheduler_service()
+                await asyncio.wait_for(
+                    scheduler.stop(),
+                    timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
+                )
+                scheduler_task.cancel()
+            except TimeoutError:
+                logger.warning("SchedulerService shutdown exceeded %.1fs", _SHUTDOWN_HOOK_TIMEOUT_SECONDS)
+            except Exception:
+                logger.exception("Failed to stop SchedulerService")
 
         # Stop channel service on shutdown (bounded to prevent worker hang)
         try:
@@ -314,6 +344,10 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
                 "description": "Manage IM channel integrations (Feishu, Slack, Telegram)",
             },
             {
+                "name": "schedules",
+                "description": "Manage scheduled tasks with cron and interval triggers",
+            },
+            {
                 "name": "assistants-compat",
                 "description": "LangGraph Platform-compatible assistants API (stub)",
             },
@@ -386,6 +420,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Channels API is mounted at /api/channels
     app.include_router(channels.router)
+
+    # Schedules API is mounted at /api/schedules
+    app.include_router(schedules.router)
 
     # Assistants compatibility API (LangGraph Platform stub)
     app.include_router(assistants_compat.router)

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime
 
+import httpx
 from croniter import croniter
 
 from deerflow.scheduler.models import ScheduledTask, ScheduleRun, ScheduleStatus
@@ -77,12 +79,106 @@ class SchedulerService:
 
     async def _execute(self, task: ScheduledTask) -> None:
         now = datetime.now(UTC)
+        run = ScheduleRun(
+            run_id=f"run_{task.task_id}_{int(now.timestamp())}",
+            task_id=task.task_id,
+            thread_id="",
+            status="running",
+            started_at=now,
+        )
+
+        if task.reuse_thread and task.thread_id:
+            run.thread_id = task.thread_id
+        else:
+            run.thread_id = await self._create_thread(task.prompt)
+
+        await self._send_message(run.thread_id, task.prompt)
+
         task.last_run_at = now
+        task.last_fired_cron_time = now
         task.run_count += 1
-        if task.trigger.cron:
-            task.last_fired_cron_time = now
         task.updated_at = now
-        logger.info("Executing scheduled task %s (run #%d)", task.task_id, task.run_count)
+        self.runs.append(run)
+
+        asyncio.create_task(self._wait_and_notify(task, run))
+
+    async def _create_thread(self, prompt: str) -> str:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "http://localhost:8000/api/threads",
+                json={},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("thread_id", "")
+
+    async def _send_message(self, thread_id: str, prompt: str) -> None:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"http://localhost:8000/api/threads/{thread_id}/runs",
+                json={"input": {"messages": [{"type": "human", "content": prompt}]}},
+            )
+            resp.raise_for_status()
+
+    async def _wait_and_notify(self, task: ScheduledTask, run: ScheduleRun) -> None:
+        timeout = task.timeout_seconds
+        start = time.time()
+        while time.time() - start < timeout:
+            status = await self._check_thread_status(run.thread_id)
+            if status in ("completed", "failed", "cancelled"):
+                run.status = status
+                run.completed_at = datetime.now(UTC)
+                break
+            await asyncio.sleep(10)
+        else:
+            run.status = "failed"
+            run.error = "执行超时"
+
+        if task.notification.enabled:
+            await self._send_notification(task, run)
+
+    async def _check_thread_status(self, thread_id: str) -> str:
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.get(
+                    f"http://localhost:8000/api/threads/{thread_id}/runs",
+                )
+                resp.raise_for_status()
+                runs = resp.json()
+                if runs:
+                    return runs[-1].get("status", "running")
+            except Exception:
+                pass
+        return "running"
+
+    async def _send_notification(self, task: ScheduledTask, run: ScheduleRun) -> None:
+        from app.channels.message_bus import OutboundMessage
+        from app.channels.service import get_channel_service
+
+        channel_service = get_channel_service()
+        if channel_service is None:
+            logger.warning("ChannelService not available, skipping notification for task %s", task.task_id)
+            return
+
+        channel = channel_service.get_channel(task.notification.channel)
+        if channel is None:
+            logger.warning("Channel %s not available", task.notification.channel)
+            return
+
+        message = run.result_summary or "任务执行完成"
+        if task.notification.include_summary and run.result_summary:
+            message = f"【定时任务】{task.name}\n状态: {run.status}\n摘要: {run.result_summary}"
+
+        try:
+            outbound = OutboundMessage(
+                channel_name=task.notification.channel,
+                chat_id=task.notification.target,
+                thread_id=run.thread_id,
+                text=message,
+            )
+            await channel_service.bus.publish_outbound(outbound)
+        except Exception:
+            logger.exception("Failed to send notification via %s", task.notification.channel)
 
     async def create_task(self, task: ScheduledTask) -> ScheduledTask:
         self.tasks[task.task_id] = task
@@ -113,3 +209,18 @@ class SchedulerService:
 
     async def get_runs(self, task_id: str) -> list[ScheduleRun]:
         return [r for r in self.runs if r.task_id == task_id]
+
+
+_scheduler_service: SchedulerService | None = None
+
+
+def get_scheduler_service() -> SchedulerService:
+    global _scheduler_service
+    if _scheduler_service is None:
+        _scheduler_service = SchedulerService()
+    return _scheduler_service
+
+
+def reset_scheduler_service() -> None:
+    global _scheduler_service
+    _scheduler_service = None
