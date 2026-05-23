@@ -749,6 +749,21 @@ sandbox:
 #     #   OPENAI_API_KEY: $OPENAI_API_KEY  # $VAR resolves from host environment
 
 # ============================================================================
+# Claude Sessions Configuration
+# ============================================================================
+# Configure Claude Code multi-session management.
+# Claude Code sessions are a specialization of ACP agents — they reuse
+# the ACP communication layer (spawn_agent_process, Client, new_session,
+# prompt) rather than implementing their own process management.
+
+# claude_sessions:
+#   enabled: true
+#   max_parallel: 3              # Maximum concurrent active sessions per thread
+#   default_timeout: 3600        # Default session timeout in seconds
+#   auto_terminate_idle: 1800    # Auto-terminate idle sessions after N seconds
+#   working_directory: null      # Default working directory for sessions
+
+# ============================================================================
 # Skills Configuration
 # ============================================================================
 # Configure skills directory for specialized agent workflows
