@@ -13,6 +13,18 @@ export interface DeerFlowAPI {
   onUpdateAvailable(callback: (info: any) => void): void;
   onUpdateDownloaded(callback: () => void): void;
   installUpdate(): void;
+  vmStart(config?: any): Promise<boolean>;
+  vmStop(): Promise<boolean>;
+  vmExecute(command: string, timeout?: number): Promise<any>;
+  vmPause(): Promise<boolean>;
+  vmResume(): Promise<boolean>;
+  vmSaveSnapshot(name: string): Promise<boolean>;
+  vmRestoreSnapshot(name: string): Promise<boolean>;
+  vmListSnapshots(): Promise<any[]>;
+  vmDeleteSnapshot(name: string): Promise<boolean>;
+  vmDefaultConfig(): Promise<any>;
+  onVMState(callback: (state: string) => void): void;
+  onVMSupport(callback: (support: any) => void): void;
 }
 
 contextBridge.exposeInMainWorld("deerflow", {
@@ -58,4 +70,27 @@ contextBridge.exposeInMainWorld("deerflow", {
   },
 
   installUpdate: () => ipcRenderer.send("install-update"),
+
+  vmStart: (config?: any) => ipcRenderer.invoke("vm-start", config),
+  vmStop: () => ipcRenderer.invoke("vm-stop"),
+  vmExecute: (command: string, timeout?: number) => ipcRenderer.invoke("vm-execute", command, timeout),
+  vmPause: () => ipcRenderer.invoke("vm-pause"),
+  vmResume: () => ipcRenderer.invoke("vm-resume"),
+  vmSaveSnapshot: (name: string) => ipcRenderer.invoke("vm-save-snapshot", name),
+  vmRestoreSnapshot: (name: string) => ipcRenderer.invoke("vm-restore-snapshot", name),
+  vmListSnapshots: () => ipcRenderer.invoke("vm-list-snapshots"),
+  vmDeleteSnapshot: (name: string) => ipcRenderer.invoke("vm-delete-snapshot", name),
+  vmDefaultConfig: () => ipcRenderer.invoke("vm-default-config"),
+
+  onVMState: (callback: (state: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, state: string) => callback(state);
+    ipcRenderer.on("vm-state", listener);
+    return () => ipcRenderer.removeListener("vm-state", listener);
+  },
+
+  onVMSupport: (callback: (support: any) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, support: any) => callback(support);
+    ipcRenderer.on("vm-support", listener);
+    return () => ipcRenderer.removeListener("vm-support", listener);
+  },
 });
