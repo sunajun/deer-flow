@@ -10,7 +10,10 @@ export interface DeerFlowAPI {
   onDeepLink(callback: (url: string) => void): () => void;
   onUpdateAvailable(callback: (info: any) => void): () => void;
   onUpdateDownloaded(callback: () => void): () => void;
+  onUpdateError(callback: (error: any) => void): () => void;
+  onUpdateDownloadProgress(callback: (progress: any) => void): () => void;
   installUpdate(): void;
+  checkForUpdates(): Promise<void>;
   vmStart(config?: any): Promise<boolean>;
   vmStop(): Promise<boolean>;
   vmExecute(command: string, timeout?: number): Promise<any>;
@@ -36,6 +39,14 @@ export interface DeerFlowAPI {
   onWSL2InstallProgress(callback: (progress: any) => void): () => void;
   onWSL2WizardStatus(callback: (status: any) => void): () => void;
   onWSL2Error(callback: (error: any) => void): () => void;
+  onConsoleLog(callback: (entries: any[]) => void): () => void;
+  setConsoleOpen(open: boolean): void;
+  getRecentLogs(count?: number): Promise<any[]>;
+  clearLogs(): Promise<boolean>;
+  exportLogs(): Promise<string | null>;
+  openSettings(): void;
+  getSettings(): Promise<any>;
+  saveSettings(settings: any): Promise<boolean>;
 }
 
 declare global {

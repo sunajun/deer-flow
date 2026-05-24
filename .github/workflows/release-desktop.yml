@@ -1,0 +1,165 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+          - os: ubuntu-latest
+            platform: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Use pinned pnpm version
+        run: corepack prepare pnpm@10.26.2 --activate
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build Python backend
+        working-directory: backend
+        run: |
+          uv sync
+          uv run pyinstaller --onefile --name deerflow-backend app/gateway/app.py --distpath ../desktop/resources/python-backend
+
+      - name: Smoke test Python backend
+        if: matrix.platform != 'linux'
+        run: |
+          BINARY_PATH="desktop/resources/python-backend/deerflow-backend${{ matrix.platform == 'win' && '.exe' || '' }}"
+          if [ -f "$BINARY_PATH" ]; then
+            timeout 5 "$BINARY_PATH" --help || true
+          fi
+        shell: bash
+
+      - name: Build frontend
+        working-directory: desktop
+        run: pnpm build
+
+      - name: Import Apple certificate (macOS)
+        if: matrix.platform == 'mac'
+        run: |
+          echo "${{ secrets.APPLE_CERTIFICATE }}" | base64 --decode > certificate.p12
+          security create-keychain -p actions temporary.keychain
+          security import certificate.p12 -k temporary.keychain -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k actions temporary.keychain
+          rm -f certificate.p12
+
+      - name: Build Electron app (macOS)
+        if: matrix.platform == 'mac'
+        working-directory: desktop
+        env:
+          CSC_LINK: ""
+          CSC_KEY_PASSWORD: ""
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: DeerFlow Team (${{ secrets.APPLE_TEAM_ID }})"
+        run: pnpm dist
+
+      - name: Notarize macOS app
+        if: matrix.platform == 'mac'
+        working-directory: desktop
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          chmod +x scripts/sign/notarize-macos-app.sh
+          APP_PATH=$(find dist -name "DeerFlow.app" -print -quit 2>/dev/null || true)
+          if [ -n "$APP_PATH" ]; then
+            ./scripts/sign/notarize-macos-app.sh "$APP_PATH"
+          fi
+
+      - name: Build Electron app (Windows)
+        if: matrix.platform == 'win'
+        working-directory: desktop
+        env:
+          WIN_CERT_FILE: ""
+          WIN_CERT_PASSWORD: ""
+        run: pnpm dist
+
+      - name: Sign Windows release
+        if: matrix.platform == 'win'
+        working-directory: desktop
+        shell: bash
+        env:
+          WIN_CERT_FILE: ${{ secrets.WIN_CERT_FILE_PATH }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+        run: |
+          if [ -n "$WIN_CERT_FILE" ] && [ -f "$WIN_CERT_FILE" ]; then
+            chmod +x scripts/sign/sign-windows-release.sh
+            ./scripts/sign/sign-windows-release.sh dist
+          fi
+
+      - name: Build Electron app (Linux)
+        if: matrix.platform == 'linux'
+        working-directory: desktop
+        run: pnpm dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deerflow-desktop-${{ matrix.platform }}
+          path: |
+            desktop/dist/*.dmg
+            desktop/dist/*.exe
+            desktop/dist/*.AppImage
+            desktop/dist/latest-*.yml
+            desktop/dist/*.blockmap
+            desktop/dist/*.zsync
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/deerflow-desktop-mac/*
+            artifacts/deerflow-desktop-win/*
+            artifacts/deerflow-desktop-linux/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'rc') }}

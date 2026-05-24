@@ -3,16 +3,19 @@ import { contextBridge, ipcRenderer } from "electron";
 export interface DeerFlowAPI {
   getPlatform(): Promise<string>;
   getAppVersion(): Promise<string>;
-  onBackendStatus(callback: (status: string) => void): void;
-  onBackendPort(callback: (port: number) => void): void;
+  onBackendStatus(callback: (status: string) => void): () => void;
+  onBackendPort(callback: (port: number) => void): () => void;
   restartBackend(): Promise<void>;
   detectSandbox(): Promise<{ type: string; available: boolean }>;
   selectDirectory(): Promise<string | null>;
   openInExplorer(path: string): void;
-  onDeepLink(callback: (url: string) => void): void;
-  onUpdateAvailable(callback: (info: any) => void): void;
-  onUpdateDownloaded(callback: () => void): void;
+  onDeepLink(callback: (url: string) => void): () => void;
+  onUpdateAvailable(callback: (info: any) => void): () => void;
+  onUpdateDownloaded(callback: () => void): () => void;
+  onUpdateError(callback: (error: any) => void): () => void;
+  onUpdateDownloadProgress(callback: (progress: any) => void): () => void;
   installUpdate(): void;
+  checkForUpdates(): Promise<void>;
   vmStart(config?: any): Promise<boolean>;
   vmStop(): Promise<boolean>;
   vmExecute(command: string, timeout?: number): Promise<any>;
@@ -23,8 +26,8 @@ export interface DeerFlowAPI {
   vmListSnapshots(): Promise<any[]>;
   vmDeleteSnapshot(name: string): Promise<boolean>;
   vmDefaultConfig(): Promise<any>;
-  onVMState(callback: (state: string) => void): void;
-  onVMSupport(callback: (support: any) => void): void;
+  onVMState(callback: (state: string) => void): () => void;
+  onVMSupport(callback: (support: any) => void): () => void;
   wsl2Detect(): Promise<any>;
   wsl2Install(): Promise<any>;
   wsl2WizardDetect(): Promise<any>;
@@ -34,10 +37,18 @@ export interface DeerFlowAPI {
   wsl2DistroUpdate(imagePath: string): Promise<any>;
   wsl2DistroVersion(): Promise<any>;
   wsl2DistroHealth(): Promise<any>;
-  onWSL2Support(callback: (support: any) => void): void;
-  onWSL2InstallProgress(callback: (progress: any) => void): void;
-  onWSL2WizardStatus(callback: (status: any) => void): void;
-  onWSL2Error(callback: (error: any) => void): void;
+  onWSL2Support(callback: (support: any) => void): () => void;
+  onWSL2InstallProgress(callback: (progress: any) => void): () => void;
+  onWSL2WizardStatus(callback: (status: any) => void): () => void;
+  onWSL2Error(callback: (error: any) => void): () => void;
+  onConsoleLog(callback: (entries: any[]) => void): () => void;
+  setConsoleOpen(open: boolean): void;
+  getRecentLogs(count?: number): Promise<any[]>;
+  clearLogs(): Promise<boolean>;
+  exportLogs(): Promise<string | null>;
+  openSettings(): void;
+  getSettings(): Promise<any>;
+  saveSettings(settings: any): Promise<boolean>;
 }
 
 contextBridge.exposeInMainWorld("deerflow", {
@@ -82,7 +93,20 @@ contextBridge.exposeInMainWorld("deerflow", {
     return () => ipcRenderer.removeListener("update-downloaded", listener);
   },
 
+  onUpdateError: (callback: (error: any) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, error: any) => callback(error);
+    ipcRenderer.on("update-error", listener);
+    return () => ipcRenderer.removeListener("update-error", listener);
+  },
+
+  onUpdateDownloadProgress: (callback: (progress: any) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: any) => callback(progress);
+    ipcRenderer.on("update-download-progress", listener);
+    return () => ipcRenderer.removeListener("update-download-progress", listener);
+  },
+
   installUpdate: () => ipcRenderer.send("install-update"),
+  checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
 
   vmStart: (config?: any) => ipcRenderer.invoke("vm-start", config),
   vmStop: () => ipcRenderer.invoke("vm-stop"),
@@ -140,4 +164,19 @@ contextBridge.exposeInMainWorld("deerflow", {
     ipcRenderer.on("wsl2-error", listener);
     return () => ipcRenderer.removeListener("wsl2-error", listener);
   },
+
+  onConsoleLog: (callback: (entries: any[]) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, entries: any[]) => callback(entries);
+    ipcRenderer.on("console:log", listener);
+    return () => ipcRenderer.removeListener("console:log", listener);
+  },
+
+  setConsoleOpen: (open: boolean) => ipcRenderer.send("console:set-open", open),
+  getRecentLogs: (count?: number) => ipcRenderer.invoke("console:get-recent-logs", count),
+  clearLogs: () => ipcRenderer.invoke("console:clear-logs"),
+  exportLogs: () => ipcRenderer.invoke("console:export-logs"),
+
+  openSettings: () => ipcRenderer.send("open-settings"),
+  getSettings: () => ipcRenderer.invoke("get-settings"),
+  saveSettings: (settings: any) => ipcRenderer.invoke("save-settings", settings),
 });

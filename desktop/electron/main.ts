@@ -1,15 +1,19 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, shell, dialog } from "electron";
 import path from "path";
 import { PythonBackendManager } from "./python-backend";
-import { VMSandboxManager, VirtualizationSupport, VMConfig, CommandResult, SnapshotInfo } from "./vm-manager";
-import { WSL2Sandbox, WSL2Error, ExecuteOptions } from "../native/windows/wsl2-bridge";
+import { VMSandboxManager, VirtualizationSupport, VMConfig } from "./vm-manager";
+import { WSL2Sandbox, WSL2Error } from "../native/windows/wsl2-bridge";
 import { WSL2Detector, WSL2Support } from "../native/windows/wsl2-detector";
 import { WSL2SetupWizard, WizardStatus } from "../native/windows/wsl2-setup-wizard";
 import { DistroManager } from "../native/windows/distro-manager";
 import { WorkspaceMount, WorkspaceMode } from "../native/windows/workspace-mount";
+import { DeerFlowTray, TrayStatus } from "./tray";
+import { Logger } from "./logger";
+import { DeerFlowUpdater } from "./updater";
+import { IncrementalUpdater } from "./incremental-updater";
 
 let mainWindow: BrowserWindow | null = null;
-let tray: Tray | null = null;
+let tray: DeerFlowTray | null = null;
 let backendManager: PythonBackendManager | null = null;
 let vmManager: VMSandboxManager | null = null;
 let vmSupport: VirtualizationSupport | null = null;
@@ -18,47 +22,41 @@ let wsl2Support: WSL2Support | null = null;
 let wsl2Wizard: WSL2SetupWizard | null = null;
 let distroManager: DistroManager | null = null;
 let workspaceMount: WorkspaceMount | null = null;
+let logger: Logger | null = null;
+let updater: DeerFlowUpdater | null = null;
+let incrementalUpdater: IncrementalUpdater | null = null;
 let isQuitting = false;
 
 const PROTOCOL = "deerflow";
 
-function getIconPath(): string {
-  return path.join(__dirname, "../assets/icon.png");
+const SETTINGS_FILE = "deerflow-settings.json";
+
+function getSettingsPath(): string {
+  return path.join(app.getPath("userData"), SETTINGS_FILE);
 }
 
-function createTray(): void {
-  const icon = nativeImage.createFromPath(getIconPath());
-  tray = new Tray(icon.resize({ width: 16, height: 16 }));
+function loadSettings(): Record<string, unknown> {
+  try {
+    const fs = require("fs");
+    const settingsPath = getSettingsPath();
+    if (fs.existsSync(settingsPath)) {
+      return JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+    }
+  } catch {
+    // ignore
+  }
+  return {};
+}
 
-  const sandboxMenuItems = vmSupport?.isSupported
-    ? [
-        { label: "重启 VM 沙箱", click: () => restartVMSandbox() },
-        { type: "separator" as const },
-      ]
-    : wsl2Support?.wslInstalled
-      ? [
-          { label: "重启 WSL2 沙箱", click: () => restartWSL2Sandbox() },
-          { type: "separator" as const },
-        ]
-      : [];
-
-  const contextMenu = Menu.buildFromTemplate([
-    { label: "显示窗口", click: () => mainWindow?.show() },
-    { type: "separator" },
-    ...sandboxMenuItems,
-    { label: "重启后端", click: () => backendManager?.restart() },
-    { type: "separator" },
-    {
-      label: "退出",
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      },
-    },
-  ]);
-  tray.setToolTip("DeerFlow");
-  tray.setContextMenu(contextMenu);
-  tray.on("double-click", () => mainWindow?.show());
+function saveSettingsToFile(settings: Record<string, unknown>): boolean {
+  try {
+    const fs = require("fs");
+    const settingsPath = getSettingsPath();
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function createMainWindow(): BrowserWindow {
@@ -98,6 +96,45 @@ function createMainWindow(): BrowserWindow {
   return mainWindow;
 }
 
+function createTray(): void {
+  tray = new DeerFlowTray({
+    showMainWindow: () => {
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    },
+    restartBackend: () => backendManager?.restart(),
+    pauseSandbox: async () => vmManager?.pauseSandbox() ?? false,
+    resumeSandbox: async () => vmManager?.resumeSandbox() ?? false,
+    checkForUpdates: () => updater?.checkForUpdates(),
+    openSettings: () => {
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.webContents.send("open-settings");
+      }
+    },
+    quitApp: () => {
+      isQuitting = true;
+      app.quit();
+    },
+    getBackendStatus: () => backendManager?.status ?? "stopped",
+    getSandboxType: () => {
+      if (process.platform === "darwin" && vmSupport?.isSupported) return "virtualization-framework";
+      if (process.platform === "win32" && wsl2Support?.wslInstalled) return "wsl2";
+      return "local";
+    },
+    getSandboxState: () => {
+      if (vmManager) return "running";
+      if (wsl2Sandbox) return "running";
+      return "stopped";
+    },
+    getAppVersion: () => app.getVersion(),
+  });
+
+  tray.create();
+}
+
 async function initVMSandbox(): Promise<void> {
   if (process.platform !== "darwin") return;
 
@@ -105,6 +142,8 @@ async function initVMSandbox(): Promise<void> {
 
   vmManager.on("state-change", (state: string) => {
     mainWindow?.webContents.send("vm-state", state);
+    const trayStatus: TrayStatus = state === "running" ? "running" : state === "error" ? "error" : "stopped";
+    tray?.setStatus(trayStatus);
   });
 
   try {
@@ -112,13 +151,13 @@ async function initVMSandbox(): Promise<void> {
     mainWindow?.webContents.send("vm-support", vmSupport);
 
     if (!vmSupport.isSupported) {
-      console.log("[VM Sandbox] Not supported:", vmSupport.reason);
+      logger?.info("sandbox", "VM Sandbox not supported: " + vmSupport.reason);
       return;
     }
 
-    console.log("[VM Sandbox] Virtualization supported:", vmSupport.chipArchitecture);
+    logger?.info("sandbox", "Virtualization supported: " + vmSupport.chipArchitecture);
   } catch (err) {
-    console.error("[VM Sandbox] Detection failed:", err);
+    logger?.error("sandbox", "Detection failed", err);
   }
 }
 
@@ -131,6 +170,8 @@ async function initWSL2Sandbox(): Promise<void> {
 
   wsl2Sandbox.on("state-change", (state: string) => {
     mainWindow?.webContents.send("vm-state", state);
+    const trayStatus: TrayStatus = state === "running" ? "running" : state === "error" ? "error" : "stopped";
+    tray?.setStatus(trayStatus);
   });
 
   try {
@@ -139,12 +180,12 @@ async function initWSL2Sandbox(): Promise<void> {
     mainWindow?.webContents.send("wsl2-support", wsl2Support);
 
     if (wsl2Support.wslInstalled && wsl2Support.wsl2Default) {
-      console.log("[WSL2] WSL2 is available");
+      logger?.info("sandbox", "WSL2 is available");
     } else {
-      console.log("[WSL2] WSL2 not available:", wsl2Support.issues.join(", "));
+      logger?.info("sandbox", "WSL2 not available: " + wsl2Support.issues.join(", "));
     }
   } catch (err) {
-    console.error("[WSL2] Detection failed:", err);
+    logger?.error("sandbox", "WSL2 Detection failed", err);
   }
 }
 
@@ -167,13 +208,13 @@ async function startVMSandbox(config?: VMConfig): Promise<boolean> {
     const started = await vmManager.startSandbox(id);
 
     if (started) {
-      console.log("[VM Sandbox] Started successfully, id:", id);
+      logger?.info("sandbox", "VM Sandbox started, id: " + id);
       await vmManager.saveSnapshot("boot", id);
     }
 
     return started;
   } catch (err) {
-    console.error("[VM Sandbox] Start failed:", err);
+    logger?.error("sandbox", "VM start failed", err);
     mainWindow?.webContents.send("vm-state", "error");
     return false;
   }
@@ -185,10 +226,10 @@ async function startWSL2Sandbox(imagePath?: string): Promise<boolean> {
   try {
     await wsl2Sandbox.init(imagePath);
     await wsl2Sandbox.start();
-    console.log("[WSL2] Sandbox started successfully");
+    logger?.info("sandbox", "WSL2 Sandbox started successfully");
     return true;
   } catch (err) {
-    console.error("[WSL2] Start failed:", err);
+    logger?.error("sandbox", "WSL2 start failed", err);
     if (err instanceof WSL2Error) {
       mainWindow?.webContents.send("wsl2-error", {
         code: err.code,
@@ -203,23 +244,21 @@ async function startWSL2Sandbox(imagePath?: string): Promise<boolean> {
 
 async function stopVMSandbox(): Promise<void> {
   if (!vmManager) return;
-
   try {
     await vmManager.stopSandbox();
-    console.log("[VM Sandbox] Stopped");
+    logger?.info("sandbox", "VM Sandbox stopped");
   } catch (err) {
-    console.error("[VM Sandbox] Stop failed:", err);
+    logger?.error("sandbox", "VM stop failed", err);
   }
 }
 
 async function stopWSL2Sandbox(): Promise<void> {
   if (!wsl2Sandbox) return;
-
   try {
     await wsl2Sandbox.stop();
-    console.log("[WSL2] Sandbox stopped");
+    logger?.info("sandbox", "WSL2 Sandbox stopped");
   } catch (err) {
-    console.error("[WSL2] Stop failed:", err);
+    logger?.error("sandbox", "WSL2 stop failed", err);
   }
 }
 
@@ -248,6 +287,11 @@ if (!gotTheLock) {
   app.on("ready", async () => {
     app.setAsDefaultProtocolClient(PROTOCOL);
 
+    logger = new Logger();
+    logger.info("electron", "DeerFlow starting...");
+
+    incrementalUpdater = new IncrementalUpdater(logger);
+
     createMainWindow();
 
     if (process.platform === "darwin") {
@@ -262,17 +306,41 @@ if (!gotTheLock) {
 
     backendManager.on("status", (status: string) => {
       mainWindow?.webContents.send("backend-status", status);
+      const trayStatus: TrayStatus = status === "ready" ? "running" : status === "error" ? "error" : "stopped";
+      tray?.setStatus(trayStatus);
+
+      if (status === "ready") {
+        tray?.notifyBackendReady();
+      } else if (status === "error") {
+        tray?.notifyBackendError();
+      }
     });
 
     backendManager.on("port", (port: number) => {
       mainWindow?.webContents.send("backend-port", port);
+      logger?.info("backend", "Backend listening on port " + port);
     });
 
     try {
       await backendManager.start();
     } catch (err) {
-      console.error("Failed to start Python backend:", err);
+      logger?.error("backend", "Failed to start Python backend", err);
       mainWindow?.webContents.send("backend-status", "error");
+    }
+
+    if (app.isPackaged) {
+      updater = new DeerFlowUpdater(logger);
+
+      updater.on("onUpdateAvailable", (info) => {
+        tray?.setUpdateAvailable(true);
+        tray?.notifyUpdateAvailable(info.version);
+      });
+
+      updater.on("onUpdateDownloaded", () => {
+        tray?.notifyUpdateDownloaded();
+      });
+
+      updater.startPeriodicCheck();
     }
   });
 
@@ -286,6 +354,10 @@ if (!gotTheLock) {
     if (backendManager) {
       await backendManager.stop();
     }
+    logger?.info("electron", "DeerFlow shutting down");
+    logger?.destroy();
+    updater?.destroy();
+    tray?.destroy();
   });
 
   app.on("window-all-closed", () => {
@@ -476,4 +548,49 @@ ipcMain.handle("select-directory", async () => {
 
 ipcMain.handle("open-in-explorer", (_event, filePath: string) => {
   shell.showItemInFolder(filePath);
+});
+
+ipcMain.on("install-update", () => {
+  updater?.installUpdate();
+});
+
+ipcMain.handle("check-for-updates", async () => {
+  await updater?.checkForUpdates();
+});
+
+ipcMain.on("console:set-open", (_event, open: boolean) => {
+  logger?.setConsoleOpen(open);
+});
+
+ipcMain.handle("console:get-recent-logs", (_event, count?: number) => {
+  return logger?.getRecentLogs(count) ?? [];
+});
+
+ipcMain.handle("console:clear-logs", () => {
+  return logger?.clearLogs() ?? false;
+});
+
+ipcMain.handle("console:export-logs", async () => {
+  const result = await dialog.showSaveDialog({
+    defaultPath: `deerflow-logs-${new Date().toISOString().split("T")[0]}.log`,
+    filters: [{ name: "Log Files", extensions: ["log"] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  const success = logger?.exportLogs(result.filePath) ?? false;
+  return success ? result.filePath : null;
+});
+
+ipcMain.on("open-settings", () => {
+  if (mainWindow) {
+    mainWindow.show();
+    mainWindow.webContents.send("open-settings");
+  }
+});
+
+ipcMain.handle("get-settings", () => {
+  return loadSettings();
+});
+
+ipcMain.handle("save-settings", (_event, settings: Record<string, unknown>) => {
+  return saveSettingsToFile(settings);
 });

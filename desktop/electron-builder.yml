@@ -34,6 +34,8 @@ mac:
   entitlements: assets/entitlements.mac.plist
   entitlementsInherit: assets/entitlements.mac.inherit.plist
   identity: "Developer ID Application: DeerFlow Team (XXXXXXXXXX)"
+  notarize:
+    teamId: "XXXXXXXXXX"
 
 win:
   target:
@@ -54,6 +56,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   installerIcon: assets/icon.ico
   uninstallerIcon: assets/icon.ico
+  differentialPackage: true
 
 linux:
   target:
@@ -62,6 +65,17 @@ linux:
         - x64
   icon: assets/icon.png
   category: Development
+  maintainer: "DeerFlow Team"
+  vendor: "DeerFlow"
+  synopsis: "DeerFlow Desktop - AI Agent with VM Sandbox"
+  description: "DeerFlow is an AI agent platform with lightweight VM sandbox for secure code execution."
+  desktop:
+    Name: DeerFlow
+    Comment: AI Agent with VM Sandbox
+    Categories: Development;IDE;
+    StartupNotify: true
+    MimeType: x-scheme-handler/deerflow;
+    StartupWMClass: deerflow-desktop
 
 publish:
   provider: github
