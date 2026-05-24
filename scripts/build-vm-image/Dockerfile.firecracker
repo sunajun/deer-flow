@@ -1,0 +1,59 @@
+FROM ubuntu:24.04 AS base
+
+ARG DEERFLOW_VERSION=0.1.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    git \
+    curl \
+    wget \
+    build-essential \
+    ca-certificates \
+    openssh-server \
+    python3.12 \
+    python3.12-venv \
+    python3-pip \
+    nodejs \
+    npm \
+    sudo \
+    systemd-sysv \
+    dbus \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -g 1000 sandbox \
+    && useradd -m -u 1000 -g 1000 -s /bin/bash sandbox \
+    && echo "sandbox ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/sandbox \
+    && mkdir -p /home/sandbox/workspace \
+    && chown sandbox:sandbox /home/sandbox/workspace
+
+RUN mkdir -p /run/sshd \
+    && ssh-keygen -A \
+    && sed -i 's/#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config \
+    && sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+    && echo "AllowUsers sandbox" >> /etc/ssh/sshd_config
+
+COPY --chmod=644 sandbox_key.pub /home/sandbox/.ssh/authorized_keys
+RUN chown sandbox:sandbox /home/sandbox/.ssh/authorized_keys \
+    && chmod 600 /home/sandbox/.ssh/authorized_keys
+
+RUN mkdir -p /etc/systemd/system/sshd.service.d \
+    && printf '[Service]\nExecStart=\nExecStart=/usr/sbin/sshd -D\n' > /etc/systemd/system/sshd.service.d/override.conf
+
+RUN apt-get purge -y \
+    man-db \
+    manpages \
+    && apt-get autoremove -y \
+    && rm -rf \
+    /var/lib/apt/lists/* \
+    /usr/share/doc/* \
+    /usr/share/man/* \
+    /usr/share/locale/* \
+    /var/cache/apt/* \
+    /var/log/* \
+    /tmp/* \
+    /home/sandbox/.cache
+
+RUN find /usr -type f -executable -exec strip --strip-unneeded {} + 2>/dev/null || true
