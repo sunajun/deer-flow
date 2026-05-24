@@ -11,6 +11,31 @@ export interface DeerFlowAPI {
   onUpdateAvailable(callback: (info: any) => void): () => void;
   onUpdateDownloaded(callback: () => void): () => void;
   installUpdate(): void;
+  vmStart(config?: any): Promise<boolean>;
+  vmStop(): Promise<boolean>;
+  vmExecute(command: string, timeout?: number): Promise<any>;
+  vmPause(): Promise<boolean>;
+  vmResume(): Promise<boolean>;
+  vmSaveSnapshot(name: string): Promise<boolean>;
+  vmRestoreSnapshot(name: string): Promise<boolean>;
+  vmListSnapshots(): Promise<any[]>;
+  vmDeleteSnapshot(name: string): Promise<boolean>;
+  vmDefaultConfig(): Promise<any>;
+  onVMState(callback: (state: string) => void): () => void;
+  onVMSupport(callback: (support: any) => void): () => void;
+  wsl2Detect(): Promise<any>;
+  wsl2Install(): Promise<any>;
+  wsl2WizardDetect(): Promise<any>;
+  wsl2WizardResume(): Promise<any>;
+  wsl2WorkspaceSetup(mode: string): Promise<any>;
+  wsl2WorkspaceVerify(): Promise<any>;
+  wsl2DistroUpdate(imagePath: string): Promise<any>;
+  wsl2DistroVersion(): Promise<any>;
+  wsl2DistroHealth(): Promise<any>;
+  onWSL2Support(callback: (support: any) => void): () => void;
+  onWSL2InstallProgress(callback: (progress: any) => void): () => void;
+  onWSL2WizardStatus(callback: (status: any) => void): () => void;
+  onWSL2Error(callback: (error: any) => void): () => void;
 }
 
 declare global {

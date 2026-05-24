@@ -25,6 +25,19 @@ export interface DeerFlowAPI {
   vmDefaultConfig(): Promise<any>;
   onVMState(callback: (state: string) => void): void;
   onVMSupport(callback: (support: any) => void): void;
+  wsl2Detect(): Promise<any>;
+  wsl2Install(): Promise<any>;
+  wsl2WizardDetect(): Promise<any>;
+  wsl2WizardResume(): Promise<any>;
+  wsl2WorkspaceSetup(mode: string): Promise<any>;
+  wsl2WorkspaceVerify(): Promise<any>;
+  wsl2DistroUpdate(imagePath: string): Promise<any>;
+  wsl2DistroVersion(): Promise<any>;
+  wsl2DistroHealth(): Promise<any>;
+  onWSL2Support(callback: (support: any) => void): void;
+  onWSL2InstallProgress(callback: (progress: any) => void): void;
+  onWSL2WizardStatus(callback: (status: any) => void): void;
+  onWSL2Error(callback: (error: any) => void): void;
 }
 
 contextBridge.exposeInMainWorld("deerflow", {
@@ -92,5 +105,39 @@ contextBridge.exposeInMainWorld("deerflow", {
     const listener = (_event: Electron.IpcRendererEvent, support: any) => callback(support);
     ipcRenderer.on("vm-support", listener);
     return () => ipcRenderer.removeListener("vm-support", listener);
+  },
+
+  wsl2Detect: () => ipcRenderer.invoke("wsl2-detect"),
+  wsl2Install: () => ipcRenderer.invoke("wsl2-install"),
+  wsl2WizardDetect: () => ipcRenderer.invoke("wsl2-wizard-detect"),
+  wsl2WizardResume: () => ipcRenderer.invoke("wsl2-wizard-resume"),
+  wsl2WorkspaceSetup: (mode: string) => ipcRenderer.invoke("wsl2-workspace-setup", mode),
+  wsl2WorkspaceVerify: () => ipcRenderer.invoke("wsl2-workspace-verify"),
+  wsl2DistroUpdate: (imagePath: string) => ipcRenderer.invoke("wsl2-distro-update", imagePath),
+  wsl2DistroVersion: () => ipcRenderer.invoke("wsl2-distro-version"),
+  wsl2DistroHealth: () => ipcRenderer.invoke("wsl2-distro-health"),
+
+  onWSL2Support: (callback: (support: any) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, support: any) => callback(support);
+    ipcRenderer.on("wsl2-support", listener);
+    return () => ipcRenderer.removeListener("wsl2-support", listener);
+  },
+
+  onWSL2InstallProgress: (callback: (progress: any) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: any) => callback(progress);
+    ipcRenderer.on("wsl2-install-progress", listener);
+    return () => ipcRenderer.removeListener("wsl2-install-progress", listener);
+  },
+
+  onWSL2WizardStatus: (callback: (status: any) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: any) => callback(status);
+    ipcRenderer.on("wsl2-wizard-status", listener);
+    return () => ipcRenderer.removeListener("wsl2-wizard-status", listener);
+  },
+
+  onWSL2Error: (callback: (error: any) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, error: any) => callback(error);
+    ipcRenderer.on("wsl2-error", listener);
+    return () => ipcRenderer.removeListener("wsl2-error", listener);
   },
 });

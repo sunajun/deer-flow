@@ -1,0 +1,62 @@
+ARG DEERFLOW_VERSION=0.1.0
+ARG BASE_IMAGE=ubuntu:22.04
+
+FROM ${BASE_IMAGE} AS base
+
+ARG DEERFLOW_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    wget \
+    git \
+    openssh-client \
+    sudo \
+    init-system-helpers \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    python3.12 \
+    python3.12-venv \
+    python3.12-dev \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+RUN groupadd -r sandbox \
+    && useradd -m -r -s /bin/bash -g sandbox sandbox \
+    && echo "sandbox ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/sandbox \
+    && chmod 0440 /etc/sudoers.d/sandbox
+
+RUN mkdir -p /home/sandbox/workspace \
+    && chown sandbox:sandbox /home/sandbox/workspace
+
+COPY wsl.conf /etc/wsl.conf
+
+RUN echo '{"version":"'"${DEERFLOW_VERSION}"'","buildTime":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","platform":"wsl2"}' > /etc/deerflow-version
+
+RUN apt-get remove -y software-properties-common \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /root/.cache/pip \
+    && rm -rf /root/.npm \
+    && rm -rf /usr/share/doc/* \
+    && rm -rf /usr/share/man/* \
+    && rm -rf /usr/share/info/* \
+    && rm -rf /tmp/*
+
+USER sandbox
+WORKDIR /home/sandbox/workspace
