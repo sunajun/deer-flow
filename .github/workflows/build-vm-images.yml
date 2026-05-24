@@ -1,0 +1,265 @@
+name: Build VM Images
+
+on:
+  push:
+    branches: ['main']
+    paths:
+      - 'scripts/build-vm-image/**'
+      - 'scripts/build-vm-image/versions.env'
+    tags: ['v*']
+  pull_request:
+    branches: ['*']
+    paths:
+      - 'scripts/build-vm-image/**'
+      - 'scripts/build-vm-image/versions.env'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version override'
+        required: false
+        default: ''
+      platforms:
+        description: 'Platforms to build (comma-separated: macos,wsl2,firecracker)'
+        required: false
+        default: 'macos,wsl2,firecracker'
+  schedule:
+    - cron: '0 2 * * 1'
+
+permissions:
+  contents: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos, wsl2, firecracker]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Load version info
+        run: |
+          cat scripts/build-vm-image/versions.env >> "$GITHUB_ENV"
+          if [[ -n "${{ github.event.inputs.version }}" ]]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build ${{ matrix.platform }} image
+        run: |
+          cd scripts/build-vm-image
+          case "${{ matrix.platform }}" in
+            macos)
+              ./build-macos.sh
+              ;;
+            wsl2)
+              ./build-wsl2.sh
+              ;;
+            firecracker)
+              ./build-firecracker.sh
+              ;;
+          esac
+
+      - name: Run image verification
+        run: |
+          cd scripts/build-vm-image
+          ./test-image.sh "$GITHUB_WORKSPACE/desktop/resources/vm-images" || true
+
+      - name: Check image sizes
+        run: |
+          IMAGE_DIR="desktop/resources/vm-images"
+          echo "=== Image Size Report ==="
+
+          case "${{ matrix.platform }}" in
+            macos)
+              ARCH=$(uname -m | sed 's/x86_64/x86_64/' | sed 's/aarch64/arm64/')
+              if [[ "$ARCH" == "aarch64" ]]; then ARCH="arm64"; fi
+              FILE="$IMAGE_DIR/deerflow-macos-${ARCH}.img.gz"
+              MAX_MB=100
+              ;;
+            wsl2)
+              FILE="$IMAGE_DIR/deerflow-rootfs.tar.gz"
+              MAX_MB=80
+              ;;
+            firecracker)
+              FILE="$IMAGE_DIR/rootfs.ext4.gz"
+              MAX_MB=50
+              ;;
+          esac
+
+          if [[ -f "$FILE" ]]; then
+            SIZE_BYTES=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+            SIZE_MB=$((SIZE_BYTES / 1024 / 1024))
+            echo "File: $FILE"
+            echo "Size: ${SIZE_MB}MB (max: ${MAX_MB}MB)"
+
+            if [[ $SIZE_MB -gt $MAX_MB ]]; then
+              echo "ERROR: Image exceeds maximum size!"
+              exit 1
+            fi
+          fi
+
+      - name: Track size trend
+        if: always()
+        run: |
+          IMAGE_DIR="desktop/resources/vm-images"
+          REPORT_FILE="$IMAGE_DIR/size-report-${{ matrix.platform }}.json"
+
+          python3 -c "
+import json, os, glob, time
+
+image_dir = '$IMAGE_DIR'
+platform = '${{ matrix.platform }}'
+report = {
+    'platform': platform,
+    'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    'commit': os.environ.get('GITHUB_SHA', 'unknown'),
+    'files': {}
+}
+
+for f in glob.glob(os.path.join(image_dir, '*')):
+    if os.path.isfile(f) and not f.endswith('.json'):
+        name = os.path.basename(f)
+        size = os.path.getsize(f)
+        report['files'][name] = {
+            'size_bytes': size,
+            'size_mb': round(size / 1024 / 1024, 2)
+        }
+
+with open('$REPORT_FILE', 'w') as fh:
+    json.dump(report, fh, indent=2)
+
+print(json.dumps(report, indent=2))
+" 2>/dev/null || true
+
+      - name: Upload image artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vm-image-${{ matrix.platform }}
+          path: desktop/resources/vm-images/
+          retention-days: 30
+
+  test-firecracker:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download firecracker image
+        uses: actions/download-artifact@v4
+        with:
+          name: vm-image-firecracker
+          path: desktop/resources/vm-images/
+
+      - name: Check KVM availability
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            echo "KVM_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "KVM is available"
+          else
+            echo "KVM_AVAILABLE=false" >> "$GITHUB_ENV"
+            echo "KVM not available - will skip live tests"
+          fi
+
+      - name: Install Firecracker
+        if: env.KVM_AVAILABLE == 'true'
+        run: |
+          source scripts/build-vm-image/versions.env
+          curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/v${FIRECRACKER_VERSION}/firecracker-v${FIRECRACKER_VERSION}-x86_64.tgz" | tar -xz
+          sudo mv release-v${FIRECRACKER_VERSION}-x86_64/firecracker-v${FIRECRACKER_VERSION}-x86_64 /usr/local/bin/firecracker
+          sudo chmod +x /usr/local/bin/firecracker
+
+      - name: Run Firecracker integration tests
+        if: env.KVM_AVAILABLE == 'true'
+        run: |
+          cd backend
+          pip install -e ".[dev]"
+          pytest tests/test_firecracker_integration.py -v --timeout=300
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all image artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: desktop/resources/vm-images/
+
+      - name: Merge artifacts into correct directory
+        run: |
+          mkdir -p release-artifacts
+          find desktop/resources/vm-images/ -type f \( -name "*.gz" -o -name "*.tar.gz" -o -name "vmlinux" -o -name "*.json" \) -exec cp {} release-artifacts/ \;
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release-artifacts
+          sha256sum * > SHA256SUMS 2>/dev/null || true
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-artifacts/*
+          generate_release_notes: true
+          body: |
+            ## DeerFlow VM Images ${{ github.ref_name }}
+
+            ### Downloads
+            - **macOS**: `deerflow-macos-*.img.gz` - Virtualization.framework disk image
+            - **Windows**: `deerflow-rootfs.tar.gz` - WSL2 rootfs
+            - **Linux**: `rootfs.ext4.gz` + `vmlinux` - Firecracker rootfs + kernel
+
+            ### Verification
+            See `SHA256SUMS` for checksums.
+
+      - name: Update latest release tag
+        run: |
+          gh release edit latest --prerelease 2>/dev/null || true
+          gh release create latest --title "Latest Build" --notes "Latest VM image build" --prerelease 2>/dev/null || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  size-trend:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download size reports
+        uses: actions/download-artifact@v4
+        with:
+          path: size-reports/
+
+      - name: Check size growth
+        run: |
+          echo "=== Size Trend Report ==="
+          find size-reports/ -name "size-report-*.json" -exec cat {} \;
+
+          python3 -c "
+import json, glob, os
+
+reports = []
+for f in glob.glob('size-reports/**/size-report-*.json', recursive=True):
+    with open(f) as fh:
+        reports.append(json.load(fh))
+
+for r in reports:
+    platform = r.get('platform', 'unknown')
+    for name, info in r.get('files', {}).items():
+        print(f'{platform}/{name}: {info[\"size_mb\"]}MB')
+" 2>/dev/null || true

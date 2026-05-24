@@ -1,6 +1,33 @@
-FROM ubuntu:24.04 AS base
-
+ARG UBUNTU_VERSION=24.04
 ARG DEERFLOW_VERSION=0.1.0
+ARG COMPAT_VERSION=1
+ARG MIN_APP_VERSION=0.1.0
+ARG PYTHON_VERSION=3.12
+ARG NODE_VERSION=20
+
+FROM ubuntu:${UBUNTU_VERSION} AS builder
+
+ARG NODE_VERSION
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM ubuntu:${UBUNTU_VERSION} AS runtime
+
+ARG DEERFLOW_VERSION
+ARG COMPAT_VERSION
+ARG MIN_APP_VERSION
+ARG PYTHON_VERSION
+ARG NODE_VERSION
+ARG UBUNTU_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
@@ -13,15 +40,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     openssh-server \
-    python3.12 \
-    python3.12-venv \
+    python${PYTHON_VERSION} \
+    python${PYTHON_VERSION}-venv \
     python3-pip \
-    nodejs \
-    npm \
     sudo \
     systemd-sysv \
     dbus \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/bin/node /usr/bin/node
+COPY --from=builder /usr/bin/npm /usr/bin/npm
+COPY --from=builder /usr/lib/node_modules /usr/lib/node_modules
+COPY --from=builder /usr/include/node /usr/include/node
+RUN ln -sf /usr/lib/node_modules/npm/bin/npm-cli.js /usr/bin/npm 2>/dev/null || true
 
 RUN groupadd -g 1000 sandbox \
     && useradd -m -u 1000 -g 1000 -s /bin/bash sandbox \
@@ -31,29 +62,40 @@ RUN groupadd -g 1000 sandbox \
 
 RUN mkdir -p /run/sshd \
     && ssh-keygen -A \
-    && sed -i 's/#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config \
-    && sed -i 's/#PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
-    && echo "AllowUsers sandbox" >> /etc/ssh/sshd_config
+    && rm -rf /root/.cache/pip \
+    && rm -rf /root/.npm
 
-COPY --chmod=644 sandbox_key.pub /home/sandbox/.ssh/authorized_keys
-RUN chown sandbox:sandbox /home/sandbox/.ssh/authorized_keys \
-    && chmod 600 /home/sandbox/.ssh/authorized_keys
-
-RUN mkdir -p /etc/systemd/system/sshd.service.d \
-    && printf '[Service]\nExecStart=\nExecStart=/usr/sbin/sshd -D\n' > /etc/systemd/system/sshd.service.d/override.conf
+COPY config/sshd_config /etc/ssh/sshd_config
+COPY config/deerflow-init.sh /usr/local/bin/deerflow-init.sh
+RUN chmod +x /usr/local/bin/deerflow-init.sh \
+    && /usr/local/bin/deerflow-init.sh "${DEERFLOW_VERSION}" "firecracker" "${COMPAT_VERSION}" "${MIN_APP_VERSION}" "${PYTHON_VERSION}" "${NODE_VERSION}" "${UBUNTU_VERSION}"
 
 RUN apt-get purge -y \
     man-db \
     manpages \
+    build-essential \
     && apt-get autoremove -y \
     && rm -rf \
     /var/lib/apt/lists/* \
     /usr/share/doc/* \
     /usr/share/man/* \
     /usr/share/locale/* \
+    /usr/share/info/* \
+    /usr/share/lintian/* \
+    /usr/share/common-licenses/* \
+    /usr/share/bash-completion/* \
+    /usr/share/zsh/* \
     /var/cache/apt/* \
     /var/log/* \
     /tmp/* \
-    /home/sandbox/.cache
+    /var/tmp/* \
+    /home/sandbox/.cache \
+    /root/.cache/pip \
+    /root/.npm
 
-RUN find /usr -type f -executable -exec strip --strip-unneeded {} + 2>/dev/null || true
+RUN find /usr -type f -executable -exec strip --strip-unneeded {} + 2>/dev/null || true \
+    && find /usr -name "*.so" -exec strip --strip-unneeded {} + 2>/dev/null || true \
+    && find /usr -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true \
+    && find /usr -type f -name "*.pyc" -delete 2>/dev/null || true \
+    && find /usr -type f -name "*.pyo" -delete 2>/dev/null || true \
+    && find /usr -type d -name tests -path "*/python*" -exec rm -rf {} + 2>/dev/null || true
