@@ -81,3 +81,50 @@ class SandboxConfig(BaseModel):
     )
 
     model_config = ConfigDict(extra="allow")
+
+
+class CrossPlatformSandboxConfig(BaseModel):
+    """Configuration for the cross-platform sandbox abstraction layer."""
+
+    strategy: str = Field(
+        default="selective",
+        description="Sandbox strategy: strict (all VM), selective (high-risk VM), local (all local)",
+    )
+    auto_detect: bool = Field(
+        default=True,
+        description="Automatically detect platform virtualization capabilities",
+    )
+    fallback: bool = Field(
+        default=True,
+        description="Enable automatic fallback when VM is unavailable",
+    )
+    local_mode_enhanced: bool = Field(
+        default=True,
+        description="Enable enhanced security measures in local mode",
+    )
+    vm_memory_mb: int = Field(
+        default=2048,
+        description="VM memory in MB",
+    )
+    vm_cpu_count: int = Field(
+        default=2,
+        description="VM CPU count",
+    )
+    vm_workspace_dir: str | None = Field(
+        default=None,
+        description="VM workspace directory (null = auto-select)",
+    )
+    firecracker_kernel_path: str | None = Field(
+        default=None,
+        description="Firecracker kernel path",
+    )
+    firecracker_rootfs_path: str | None = Field(
+        default=None,
+        description="Firecracker rootfs path",
+    )
+    firecracker_file_sharing: str = Field(
+        default="scp",
+        description="Firecracker file sharing method",
+    )
+
+    model_config = ConfigDict(extra="allow")
